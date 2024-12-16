@@ -29,3 +29,37 @@ fn main() {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokenizer::{TokenKind, Tokenizer};
+
+  #[test]
+  fn test_tokenize() {
+    let source = "
+      fn main() {
+        println(\"Hello, World!\");
+      }
+    ";
+    let mut tokenizer = Tokenizer::new(source.to_string());
+    let tokens = tokenizer.tokenize().unwrap();
+    let tokens = tokens.iter().map(|t| t.kind.clone()).collect::<Vec<_>>();
+    assert_eq!(
+      tokens,
+      vec![
+        TokenKind::KwFn,
+        TokenKind::Identifier,
+        TokenKind::OpenParen,
+        TokenKind::CloseParen,
+        TokenKind::OpenBrace,
+        TokenKind::Identifier,
+        TokenKind::OpenParen,
+        TokenKind::String,
+        TokenKind::CloseParen,
+        TokenKind::Semicolon,
+        TokenKind::CloseBrace,
+      ]
+    );
+  }
+}
