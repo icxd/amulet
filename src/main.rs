@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod checker;
 pub mod error;
 pub mod parser;
 pub mod span;

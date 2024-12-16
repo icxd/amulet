@@ -116,8 +116,9 @@ impl Parser {
         self.expect(TokenKind::OpenBrace)?;
         while self.current().kind != TokenKind::CloseBrace {
           match self.current().kind {
-            TokenKind::KwMut => {
-              self.expect(TokenKind::KwMut)?;
+            TokenKind::KwMut | TokenKind::KwLet => {
+              let mutable = self.current().kind == TokenKind::KwMut;
+              self.pos += 1;
               let name = self.expect(TokenKind::Identifier)?;
               let _ = self.expect(TokenKind::Colon)?;
               let r#type = self.parse_type()?;
@@ -130,7 +131,7 @@ impl Parser {
               self.expect(TokenKind::Semicolon)?;
               fields.push((
                 ParsedVariable {
-                  mutable: true,
+                  mutable,
                   name: name.literal.clone(),
                   r#type,
                 },

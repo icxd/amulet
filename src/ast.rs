@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::span::Span;
 
 #[derive(Debug)]
