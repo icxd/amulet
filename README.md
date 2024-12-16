@@ -1,6 +1,7 @@
 # amulet
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/icxd/amulet/rust.yml?style=for-the-badge)
+![GitHub](https://img.shields.io/github/license/icxd/amulet?style=for-the-badge)
 
 A statically-typed, mainly object-oriented programming language written in Rust.
 
