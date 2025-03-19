@@ -1,0 +1,23 @@
+type Span = class {
+  let start: u32;
+  let end: u32;
+};
+
+type Token = class {
+  let kind: u8;
+  let literal: string;
+  let span: Span;
+};
+
+fn tokenize(source: string) -> Array<Token> {
+  mut tokens = Array<Token>();
+  mut pos = 0;
+  while (pos < source.size) {
+    let ch = source.at(pos);
+    pos += 1;
+  }
+  return tokens;
+}
+
+fn main() {
+}

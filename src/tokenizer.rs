@@ -1,4 +1,5 @@
 use crate::{
+  compiler::FileId,
   error::{Error, Result},
   span::Span,
 };
@@ -12,17 +13,30 @@ pub enum TokenKind {
   Float,
   String,
 
-  KwPkg,
-  KwType,
-  KwInterface, KwClass,
-  KwLet, KwMut,
+  KwAs,
+  KwAsm,
+  KwBreak, 
+  KwContinue,
+  KwCallConv, 
+  KwClass,
+  KwConst, 
+  KwElse,
   KwFn,
-  KwUnreachable, KwTodo,
-  KwIf, KwElse,
   KwFor,
-  KwWhile,
-  KwBreak, KwContinue,
+  KwIf, 
+  KwInterface, 
+  KwLet, 
+  KwLoop,
+  KwMut,
+  KwNative, 
+  KwNoReturn,
+  KwPkg,
   KwReturn,
+  KwStatic,
+  KwTodo,
+  KwType,
+  KwUnreachable, 
+  KwWhile,
 
   OpenParen, CloseParen,
   OpenBracket, CloseBracket,
@@ -55,22 +69,30 @@ impl std::fmt::Display for TokenKind {
         TokenKind::Integer => "integer",
         TokenKind::Float => "float",
         TokenKind::String => "string",
-        TokenKind::KwPkg => "pkg",
-        TokenKind::KwType => "type",
-        TokenKind::KwInterface => "interface",
-        TokenKind::KwClass => "class",
-        TokenKind::KwLet => "let",
-        TokenKind::KwMut => "mut",
-        TokenKind::KwFn => "fn",
-        TokenKind::KwUnreachable => "unreachable",
-        TokenKind::KwTodo => "todo",
-        TokenKind::KwIf => "if",
-        TokenKind::KwElse => "else",
-        TokenKind::KwFor => "for",
-        TokenKind::KwWhile => "while",
+        TokenKind::KwAs => "as",
+        TokenKind::KwAsm => "asm",
         TokenKind::KwBreak => "break",
+        TokenKind::KwCallConv => "callconv",
+        TokenKind::KwClass => "class",
+        TokenKind::KwConst => "const",
         TokenKind::KwContinue => "continue",
+        TokenKind::KwElse => "else",
+        TokenKind::KwFn => "fn",
+        TokenKind::KwFor => "for",
+        TokenKind::KwIf => "if",
+        TokenKind::KwInterface => "interface",
+        TokenKind::KwLet => "let",
+        TokenKind::KwLoop => "loop",
+        TokenKind::KwMut => "mut",
+        TokenKind::KwNative => "native",
+        TokenKind::KwNoReturn => "noreturn",
+        TokenKind::KwPkg => "pkg",
         TokenKind::KwReturn => "return",
+        TokenKind::KwStatic => "static",
+        TokenKind::KwTodo => "todo",
+        TokenKind::KwType => "type",
+        TokenKind::KwUnreachable => "unreachable",
+        TokenKind::KwWhile => "while",
         TokenKind::OpenParen => "(",
         TokenKind::CloseParen => ")",
         TokenKind::OpenBracket => "[",
@@ -118,13 +140,18 @@ pub struct Token {
 }
 
 pub struct Tokenizer {
+  file_id: FileId,
   source: String,
   pos: usize,
 }
 
 impl Tokenizer {
-  pub fn new(source: String) -> Self {
-    Self { source, pos: 0 }
+  pub fn new(file_id: FileId, source: String) -> Self {
+    Self {
+      file_id,
+      source,
+      pos: 0,
+    }
   }
 
   pub fn tokenize(&mut self) -> Result<Vec<Token>> {
@@ -149,58 +176,89 @@ impl Tokenizer {
           let literal = self.source[start..end].to_string();
           tokens.push(Token {
             kind: match literal.as_str() {
-              "pkg" => TokenKind::KwPkg,
-              "type" => TokenKind::KwType,
-              "interface" => TokenKind::KwInterface,
-              "class" => TokenKind::KwClass,
-              "let" => TokenKind::KwLet,
-              "mut" => TokenKind::KwMut,
-              "fn" => TokenKind::KwFn,
-              "unreachable" => TokenKind::KwUnreachable,
-              "todo" => TokenKind::KwTodo,
-              "if" => TokenKind::KwIf,
-              "else" => TokenKind::KwElse,
-              "for" => TokenKind::KwFor,
-              "while" => TokenKind::KwWhile,
+              "as" => TokenKind::KwAs,
+              "asm" => TokenKind::KwAsm,
               "break" => TokenKind::KwBreak,
+              "callconv" => TokenKind::KwCallConv,
+              "class" => TokenKind::KwClass,
+              "const" => TokenKind::KwConst,
               "continue" => TokenKind::KwContinue,
+              "else" => TokenKind::KwElse,
+              "fn" => TokenKind::KwFn,
+              "for" => TokenKind::KwFor,
+              "if" => TokenKind::KwIf,
+              "interface" => TokenKind::KwInterface,
+              "let" => TokenKind::KwLet,
+              "loop" => TokenKind::KwLoop,
+              "mut" => TokenKind::KwMut,
+              "native" => TokenKind::KwNative,
+              "noreturn" => TokenKind::KwNoReturn,
+              "pkg" => TokenKind::KwPkg,
               "return" => TokenKind::KwReturn,
+              "static" => TokenKind::KwStatic,
+              "todo" => TokenKind::KwTodo,
+              "type" => TokenKind::KwType,
+              "unreachable" => TokenKind::KwUnreachable,
+              "while" => TokenKind::KwWhile,
               _ => TokenKind::Identifier,
             },
-            span: Span::new(start, end),
+            span: Span::new(self.file_id, start, end),
             literal,
           });
         }
 
         Some('0'..='9') => {
           let start = self.pos;
-          while self.pos < self.source.len()
-            && self.source.chars().nth(self.pos).unwrap().is_digit(10)
+          if self.source.chars().nth(self.pos).unwrap() == '0'
+            && self.pos + 1 < self.source.len()
+            && self.source.chars().nth(self.pos + 1).unwrap() == 'x'
           {
-            self.pos += 1;
-          }
-          if self.source.chars().nth(self.pos).unwrap() == '.' {
-            self.pos += 1;
+            self.pos += 2;
             while self.pos < self.source.len()
-              && self.source.chars().nth(self.pos).unwrap().is_digit(10)
+              && self.source.chars().nth(self.pos).unwrap().is_digit(16)
             {
               self.pos += 1;
             }
             let end = self.pos;
             let literal = self.source[start..end].to_string();
-            tokens.push(Token {
-              kind: TokenKind::Float,
-              span: Span::new(start, end),
-              literal,
-            });
-          } else {
-            let end = self.pos;
-            let literal = self.source[start..end].to_string();
+            let literal = literal.trim_start_matches("0x");
             tokens.push(Token {
               kind: TokenKind::Integer,
-              span: Span::new(start, end),
-              literal,
+              span: Span::new(self.file_id, start, end),
+              literal: match i128::from_str_radix(literal, 16) {
+                Ok(value) => value.to_string(),
+                Err(_) => panic!("internal error: unable to parse integer literal"),
+              },
             });
+          } else {
+            while self.pos < self.source.len()
+              && self.source.chars().nth(self.pos).unwrap().is_digit(10)
+            {
+              self.pos += 1;
+            }
+            if self.source.chars().nth(self.pos).unwrap() == '.' {
+              self.pos += 1;
+              while self.pos < self.source.len()
+                && self.source.chars().nth(self.pos).unwrap().is_digit(10)
+              {
+                self.pos += 1;
+              }
+              let end = self.pos;
+              let literal = self.source[start..end].to_string();
+              tokens.push(Token {
+                kind: TokenKind::Float,
+                span: Span::new(self.file_id, start, end),
+                literal,
+              });
+            } else {
+              let end = self.pos;
+              let literal = self.source[start..end].to_string();
+              tokens.push(Token {
+                kind: TokenKind::Integer,
+                span: Span::new(self.file_id, start, end),
+                literal,
+              });
+            }
           }
         }
 
@@ -214,7 +272,7 @@ impl Tokenizer {
           let literal = self.source[start..end].to_string();
           tokens.push(Token {
             kind: TokenKind::String,
-            span: Span::new(start, end),
+            span: Span::new(self.file_id, start, end),
             literal,
           });
           self.pos += 1;
@@ -223,7 +281,7 @@ impl Tokenizer {
         Some('(') => {
           tokens.push(Token {
             kind: TokenKind::OpenParen,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -231,7 +289,7 @@ impl Tokenizer {
         Some(')') => {
           tokens.push(Token {
             kind: TokenKind::CloseParen,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -240,7 +298,7 @@ impl Tokenizer {
         Some('[') => {
           tokens.push(Token {
             kind: TokenKind::OpenBracket,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -248,7 +306,7 @@ impl Tokenizer {
         Some(']') => {
           tokens.push(Token {
             kind: TokenKind::CloseBracket,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -257,7 +315,7 @@ impl Tokenizer {
         Some('{') => {
           tokens.push(Token {
             kind: TokenKind::OpenBrace,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -265,7 +323,7 @@ impl Tokenizer {
         Some('}') => {
           tokens.push(Token {
             kind: TokenKind::CloseBrace,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -274,7 +332,7 @@ impl Tokenizer {
         Some('.') => {
           tokens.push(Token {
             kind: TokenKind::Period,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -283,7 +341,7 @@ impl Tokenizer {
         Some(',') => {
           tokens.push(Token {
             kind: TokenKind::Comma,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -292,7 +350,7 @@ impl Tokenizer {
         Some(':') => {
           tokens.push(Token {
             kind: TokenKind::Colon,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -300,7 +358,7 @@ impl Tokenizer {
         Some(';') => {
           tokens.push(Token {
             kind: TokenKind::Semicolon,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -310,14 +368,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::PlusEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Plus,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -328,21 +386,21 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::MinusEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else if self.source.chars().nth(self.pos + 1).unwrap() == '>' {
             tokens.push(Token {
               kind: TokenKind::Arrow,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}>", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Minus,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -353,14 +411,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::AsteriskEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Asterisk,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -371,8 +429,8 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::SlashEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else if self.source.chars().nth(self.pos + 1).unwrap() == '/' {
@@ -384,7 +442,7 @@ impl Tokenizer {
           } else {
             tokens.push(Token {
               kind: TokenKind::Slash,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -395,14 +453,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::PercentEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Percent,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -413,14 +471,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::EqualEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Equal,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -431,14 +489,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::BangEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Bang,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -449,14 +507,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::LessEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Less,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -467,14 +525,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::GreaterEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Greater,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -484,7 +542,7 @@ impl Tokenizer {
         Some('?') => {
           tokens.push(Token {
             kind: TokenKind::Question,
-            span: Span::new(self.pos, self.pos + 1),
+            span: Span::new(self.file_id, self.pos, self.pos + 1),
             literal: c.unwrap().to_string(),
           });
           self.pos += 1;
@@ -494,14 +552,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::AmpersandEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Ampersand,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -511,14 +569,14 @@ impl Tokenizer {
           if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
             tokens.push(Token {
               kind: TokenKind::PipeEqual,
-              span: Span::new(self.pos, self.pos + 2),
-              literal: c.unwrap().to_string(),
+              span: Span::new(self.file_id, self.pos, self.pos + 2),
+              literal: format!("{}=", c.unwrap()),
             });
             self.pos += 2;
           } else {
             tokens.push(Token {
               kind: TokenKind::Pipe,
-              span: Span::new(self.pos, self.pos + 1),
+              span: Span::new(self.file_id, self.pos, self.pos + 1),
               literal: c.unwrap().to_string(),
             });
             self.pos += 1;
@@ -527,8 +585,8 @@ impl Tokenizer {
 
         _ => {
           return Err(Error::new(
-            Span::new(self.pos, self.pos + 1),
-            format!("Unexpected character '{}'", c.unwrap()),
+            Span::new(self.file_id, self.pos, self.pos + 1),
+            format!("unexpected character '{}'", c.unwrap()),
           ));
         }
       }

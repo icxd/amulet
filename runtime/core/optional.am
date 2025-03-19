@@ -1,0 +1,4 @@
+type Optional<T> = class {
+  let value: T;
+  let is_some: bool;
+};

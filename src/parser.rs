@@ -2,10 +2,12 @@ use log::trace;
 
 use crate::{
   ast::{
-    BinaryOperator, NumericConstant, ParsedBlock, ParsedCall, ParsedExpression, ParsedFunction,
-    ParsedNamespace, ParsedStatement, ParsedType, ParsedTypeDecl, ParsedTypeDeclData,
-    ParsedVarDecl, ParsedVariable,
+    BinaryOperator, DefinitionLinkage, NumericConstant, ParsedBlock, ParsedCall, ParsedConst,
+    ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
+    ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, ParsedVariable,
+    UnaryOperator,
   },
+  compiler::FileId,
   error::{Error, Result},
   span::Span,
   tokenizer::{Token, TokenKind},
@@ -13,13 +15,18 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Parser {
+  file_id: FileId,
   tokens: Vec<Token>,
   pos: usize,
 }
 
 impl Parser {
-  pub fn new(tokens: Vec<Token>) -> Self {
-    Self { tokens, pos: 0 }
+  pub fn new(file_id: FileId, tokens: Vec<Token>) -> Self {
+    Self {
+      file_id,
+      tokens,
+      pos: 0,
+    }
   }
 
   pub fn parse(&mut self) -> Result<ParsedNamespace> {
@@ -36,8 +43,14 @@ impl Parser {
       let token = self.tokens.get(self.pos).unwrap();
 
       match token.kind {
-        TokenKind::KwFn => {
-          let fun = self.parse_fn()?;
+        TokenKind::KwFn | TokenKind::KwNative => {
+          let linkage = if token.kind == TokenKind::KwFn {
+            DefinitionLinkage::Internal
+          } else {
+            self.expect(TokenKind::KwNative)?;
+            DefinitionLinkage::External
+          };
+          let fun = self.parse_fn(linkage)?;
           namespace.functions.push(fun);
         }
 
@@ -54,6 +67,25 @@ impl Parser {
         TokenKind::KwType => {
           let type_decl = self.parse_type_decl()?;
           namespace.type_decls.push(type_decl);
+        }
+
+        TokenKind::KwConst => {
+          // TODO: native const
+          self.expect(TokenKind::KwConst)?;
+          let name = self.expect(TokenKind::Identifier)?;
+          let name_span = name.span;
+          self.expect(TokenKind::Colon)?;
+          let r#type = self.parse_type()?;
+          self.expect(TokenKind::Equal)?;
+          let value = Some(self.parse_expression(false)?);
+          self.expect(TokenKind::Semicolon)?;
+          namespace.constants.push(ParsedConst {
+            name: name.literal.clone(),
+            name_span,
+            linkage: DefinitionLinkage::Internal,
+            r#type,
+            value,
+          });
         }
 
         _ => {
@@ -83,6 +115,7 @@ impl Parser {
       name_span,
       type_parameters: type_params,
       data,
+      linkage: DefinitionLinkage::Internal,
     })
   }
 
@@ -94,7 +127,7 @@ impl Parser {
         self.expect(TokenKind::OpenBrace)?;
         let mut functions = vec![];
         while self.current().kind != TokenKind::CloseBrace {
-          let fun = self.parse_fn()?;
+          let fun = self.parse_fn(DefinitionLinkage::Internal)?;
           functions.push(fun);
         }
         self.expect(TokenKind::CloseBrace)?;
@@ -124,23 +157,24 @@ impl Parser {
               let r#type = self.parse_type()?;
               let value = if self.current().kind == TokenKind::Equal {
                 self.expect(TokenKind::Equal)?;
-                Some(self.parse_expression()?)
+                Some(self.parse_expression(false)?)
               } else {
                 None
               };
               self.expect(TokenKind::Semicolon)?;
               fields.push((
-                ParsedVariable {
+                ParsedVarDecl {
                   mutable,
                   name: name.literal.clone(),
-                  r#type,
+                  span: name.span,
+                  ty: r#type,
                 },
                 value,
               ));
             }
 
             TokenKind::KwFn => {
-              let fun = self.parse_fn()?;
+              let fun = self.parse_fn(DefinitionLinkage::Internal)?;
               methods.push(fun);
             }
 
@@ -164,18 +198,13 @@ impl Parser {
       }
 
       _ => {
-        return Err(Error::new(
-          self.current().span,
-          format!(
-            "expected type decl data but found `{}`",
-            self.current().kind
-          ),
-        ))
+        let alias = self.parse_type()?;
+        Ok(ParsedTypeDeclData::Alias(alias))
       }
     }
   }
 
-  fn parse_fn(&mut self) -> Result<ParsedFunction> {
+  fn parse_fn(&mut self, linkage: DefinitionLinkage) -> Result<ParsedFunction> {
     trace!("parse_fn: {:?}", self.current());
     let _ = self.expect(TokenKind::KwFn)?;
     let name_token = self.expect(TokenKind::Identifier)?;
@@ -189,27 +218,63 @@ impl Parser {
     } else {
       None
     };
-    let body = if self.current().kind == TokenKind::OpenBrace {
-      self.parse_block()?
+    let attributes = self.parse_function_attributes()?;
+    let body = if linkage == DefinitionLinkage::External {
+      None
+    } else if self.current().kind == TokenKind::OpenBrace {
+      Some(self.parse_block()?)
     } else if self.current().kind == TokenKind::Equal {
-      self.pos += 1;
-      let expr = self.parse_expression()?;
-      self.expect(TokenKind::Semicolon)?;
-      ParsedBlock {
-        stmts: vec![ParsedStatement::Return(expr)],
-      }
+      let return_token = self.current().clone();
+      self.expect(TokenKind::Equal)?;
+      let expr = self.parse_expression(false)?;
+      let semi = self.expect(TokenKind::Semicolon)?;
+      Some(ParsedBlock {
+        stmts: vec![ParsedStatement::Return(
+          expr,
+          return_token.span.join(&semi.span),
+        )],
+        span: return_token.span.join(&semi.span),
+      })
+    } else if self.current().kind == TokenKind::Semicolon {
+      let span = self.expect(TokenKind::Semicolon)?.span;
+      Some(ParsedBlock {
+        stmts: vec![],
+        span,
+      })
     } else {
-      self.expect(TokenKind::Semicolon)?;
-      ParsedBlock { stmts: vec![] }
+      None
     };
     Ok(ParsedFunction {
       name,
       name_span,
+      linkage,
+      attributes,
       type_parameters: type_params,
       parameters,
       return_type,
       body,
     })
+  }
+
+  fn parse_function_attributes(&mut self) -> Result<Vec<ParsedFunctionAttribute>> {
+    trace!("parse_function_attributes: {:?}", self.current());
+    let mut attributes = vec![];
+    while self.current().kind == TokenKind::KwCallConv
+      || self.current().kind == TokenKind::KwNoReturn
+    {
+      let attribute = if self.current().kind == TokenKind::KwCallConv {
+        self.expect(TokenKind::KwCallConv)?;
+        self.expect(TokenKind::OpenParen)?;
+        let conv = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::CloseParen)?;
+        ParsedFunctionAttribute::CallConv(conv.literal)
+      } else {
+        self.expect(TokenKind::KwNoReturn)?;
+        ParsedFunctionAttribute::NoReturn
+      };
+      attributes.push(attribute);
+    }
+    Ok(attributes)
   }
 
   fn parse_parameters(&mut self) -> Result<Vec<ParsedVariable>> {
@@ -231,14 +296,17 @@ impl Parser {
 
   fn parse_block(&mut self) -> Result<ParsedBlock> {
     trace!("parse_block: {:?}", self.current());
-    self.expect(TokenKind::OpenBrace)?;
+    let obrace = self.expect(TokenKind::OpenBrace)?;
     let mut stmts = vec![];
     while self.current().kind != TokenKind::CloseBrace {
       let stmt = self.parse_statement()?;
       stmts.push(stmt);
     }
-    self.expect(TokenKind::CloseBrace)?;
-    Ok(ParsedBlock { stmts })
+    let cbrace = self.expect(TokenKind::CloseBrace)?;
+    Ok(ParsedBlock {
+      stmts,
+      span: obrace.span.join(&cbrace.span),
+    })
   }
 
   fn parse_variable(&mut self) -> Result<ParsedVariable> {
@@ -267,14 +335,24 @@ impl Parser {
     })
   }
 
-  fn parse_type_params(&mut self) -> Result<Vec<(String, Span)>> {
+  fn parse_type_params(&mut self) -> Result<Vec<ParsedTypeArg>> {
     trace!("parse_type_params: {:?}", self.current());
     let mut type_params = vec![];
     if self.current().kind == TokenKind::Less {
       self.expect(TokenKind::Less)?;
       while self.current().kind != TokenKind::Greater {
         let name = self.expect(TokenKind::Identifier)?;
-        type_params.push((name.literal.clone(), name.span));
+        let constraint = if self.current().kind == TokenKind::Colon {
+          self.expect(TokenKind::Colon)?;
+          Some(self.parse_type()?)
+        } else {
+          None
+        };
+        type_params.push(ParsedTypeArg {
+          name: name.literal.clone(),
+          constraint,
+          span: name.span,
+        });
         if self.current().kind == TokenKind::Comma {
           self.expect(TokenKind::Comma)?;
         }
@@ -288,10 +366,13 @@ impl Parser {
     trace!("parse_statement: {:?}", self.current());
     match self.current().kind {
       TokenKind::KwReturn => {
-        self.pos += 1;
-        let expr = self.parse_expression()?;
-        self.expect(TokenKind::Semicolon)?;
-        Ok(ParsedStatement::Return(expr))
+        let r#return = self.expect(TokenKind::KwReturn)?;
+        let expr = self.parse_expression(false)?;
+        let semi = self.expect(TokenKind::Semicolon)?;
+        Ok(ParsedStatement::Return(
+          expr,
+          r#return.span.join(&semi.span),
+        ))
       }
 
       TokenKind::KwLet | TokenKind::KwMut => {
@@ -307,7 +388,7 @@ impl Parser {
           ParsedType::Empty
         };
         self.expect(TokenKind::Equal)?;
-        let value = self.parse_expression()?;
+        let value = self.parse_expression(false)?;
         self.expect(TokenKind::Semicolon)?;
         Ok(ParsedStatement::VarDecl(
           ParsedVarDecl {
@@ -317,13 +398,14 @@ impl Parser {
             span,
           },
           value,
+          span,
         ))
       }
 
       TokenKind::KwIf => {
-        self.pos += 1;
+        let span = self.expect(TokenKind::KwIf)?.span;
         self.expect(TokenKind::OpenParen)?;
-        let condition = self.parse_expression()?;
+        let condition = self.parse_expression(false)?;
         self.expect(TokenKind::CloseParen)?;
         let then = self.parse_block()?;
         let mut else_ = None;
@@ -331,25 +413,54 @@ impl Parser {
           self.pos += 1;
           else_ = Some(self.parse_block()?);
         }
-        Ok(ParsedStatement::If(condition, then, else_.map(Box::new)))
+        let mut span = span.join(&then.span);
+        if let Some(ref else_) = else_ {
+          span = span.join(&else_.span);
+        }
+        Ok(ParsedStatement::If(
+          condition,
+          then.clone(),
+          else_.clone().map(Box::new),
+          span,
+        ))
       }
 
       TokenKind::KwWhile => {
-        self.pos += 1;
-        self.expect(TokenKind::OpenParen)?;
-        let condition = self.parse_expression()?;
-        self.expect(TokenKind::CloseParen)?;
+        let span = self.expect(TokenKind::KwWhile)?.span;
+        let condition = self.parse_expression(false)?;
         let body = self.parse_block()?;
-        Ok(ParsedStatement::While(condition, body))
+        Ok(ParsedStatement::While(
+          condition,
+          body.clone(),
+          span.join(&body.span),
+        ))
+      }
+
+      TokenKind::KwLoop => {
+        let span = self.expect(TokenKind::KwLoop)?.span;
+        let body = self.parse_block()?;
+        Ok(ParsedStatement::Loop(body.clone(), span.join(&body.span)))
+      }
+
+      TokenKind::KwAsm => {
+        let span = self.expect(TokenKind::KwAsm)?.span;
+        self.expect(TokenKind::OpenBrace)?;
+        let mut asm = vec![];
+        while self.current().kind != TokenKind::CloseBrace {
+          let line = self.expect(TokenKind::String)?;
+          asm.push(line.literal);
+        }
+        self.expect(TokenKind::CloseBrace)?;
+        Ok(ParsedStatement::InlineAsm(asm, span))
       }
 
       TokenKind::KwBreak => {
-        self.pos += 1;
-        Ok(ParsedStatement::Break)
+        let span = self.expect(TokenKind::KwBreak)?.span;
+        Ok(ParsedStatement::Break(span))
       }
       TokenKind::KwContinue => {
-        self.pos += 1;
-        Ok(ParsedStatement::Continue)
+        let span = self.expect(TokenKind::KwContinue)?.span;
+        Ok(ParsedStatement::Continue(span))
       }
 
       TokenKind::OpenBrace => {
@@ -358,14 +469,14 @@ impl Parser {
       }
 
       _ => {
-        let expr = self.parse_expression()?;
+        let expr = self.parse_expression(true)?;
         self.expect(TokenKind::Semicolon)?;
         Ok(ParsedStatement::Expression(expr))
       }
     }
   }
 
-  fn parse_expression(&mut self) -> Result<ParsedExpression> {
+  fn parse_expression(&mut self, assignable: bool) -> Result<ParsedExpression> {
     trace!("parse_expression: {:?}", self.current());
     let mut expr_stack = vec![];
     let mut last_prec = 1000000;
@@ -378,7 +489,7 @@ impl Parser {
         break;
       }
 
-      let op = self.parse_operator();
+      let op = self.parse_operator(assignable);
       if let Err(_) = op {
         break;
       }
@@ -415,7 +526,7 @@ impl Parser {
 
         match op {
           ParsedExpression::Operator(op, _) => {
-            let span = Span::new(lhs.span().start, rhs.span().end);
+            let span = Span::new(self.file_id, lhs.span().start, rhs.span().end);
             expr_stack.push(ParsedExpression::BinaryOp(
               Box::new(lhs),
               op,
@@ -446,7 +557,7 @@ impl Parser {
 
       match op {
         ParsedExpression::Operator(op, _) => {
-          let span = Span::new(lhs.span().start, rhs.span().end);
+          let span = Span::new(self.file_id, lhs.span().start, rhs.span().end);
           expr_stack.push(ParsedExpression::BinaryOp(
             Box::new(lhs),
             op,
@@ -473,13 +584,41 @@ impl Parser {
     let mut expr = match self.current().kind {
       TokenKind::Integer => {
         self.pos += 1;
-        ParsedExpression::NumericConstant(
-          match name.parse::<i128>() {
-            Ok(value) => NumericConstant::I128(value),
-            Err(_) => return Err(Error::new(span, "integer is too big".into())),
-          },
-          span,
-        )
+        let value = name.parse::<i128>().unwrap();
+
+        let constant = if value < i8::MAX as i128 {
+          if value < 0 {
+            NumericConstant::I8(value as i8)
+          } else {
+            NumericConstant::U8(value as u8)
+          }
+        } else if value < i16::MAX as i128 {
+          if value < 0 {
+            NumericConstant::I16(value as i16)
+          } else {
+            NumericConstant::U16(value as u16)
+          }
+        } else if value < i32::MAX as i128 {
+          if value < 0 {
+            NumericConstant::I32(value as i32)
+          } else {
+            NumericConstant::U32(value as u32)
+          }
+        } else if value < i64::MAX as i128 {
+          if value < 0 {
+            NumericConstant::I64(value as i64)
+          } else {
+            NumericConstant::U64(value as u64)
+          }
+        } else {
+          if value < 0 {
+            NumericConstant::I128(value as i128)
+          } else {
+            NumericConstant::U128(value as u128)
+          }
+        };
+
+        ParsedExpression::NumericConstant(constant, span)
       }
 
       TokenKind::Float => {
@@ -498,6 +637,12 @@ impl Parser {
         ParsedExpression::QuotedString(name, span)
       }
 
+      TokenKind::Identifier if name == "c" => {
+        self.pos += 1;
+        let string = self.expect(TokenKind::String)?;
+        ParsedExpression::QuotedCString(string.literal, string.span)
+      }
+
       TokenKind::Identifier => {
         if self.pos + 1 < self.tokens.len() {
           match self.tokens.get(self.pos + 1).unwrap().kind {
@@ -506,9 +651,11 @@ impl Parser {
               ParsedExpression::Call(call, span)
             }
             TokenKind::Less => {
+              let restore_pos = self.pos;
               let call = self.parse_call();
 
               if call.is_err() {
+                self.pos = restore_pos + 1;
                 ParsedExpression::Var(name, span)
               } else {
                 ParsedExpression::Call(call.unwrap(), span)
@@ -542,6 +689,17 @@ impl Parser {
 
     while self.pos < self.tokens.len() {
       match self.current().kind {
+        TokenKind::KwAs => {
+          self.expect(TokenKind::KwAs)?;
+          let type_ = self.parse_type()?;
+          let span = Span {
+            file_id: self.file_id,
+            start: expr.span().start,
+            end: self.current().span.end,
+          };
+          expr = ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::As(type_), span);
+        }
+
         TokenKind::Period => {
           self.expect(TokenKind::Period)?;
 
@@ -555,6 +713,7 @@ impl Parser {
                     self.pos -= 1;
 
                     let span = Span {
+                      file_id: self.file_id,
                       start: expr.span().start,
                       end: self.current().span.end,
                     };
@@ -567,6 +726,7 @@ impl Parser {
 
                     let call = self.parse_call();
                     let span = Span {
+                      file_id: self.file_id,
                       start: expr.span().start,
                       end: self.current().span.end,
                     };
@@ -579,6 +739,7 @@ impl Parser {
                   }
                   _ => {
                     let span = Span {
+                      file_id: self.file_id,
                       start: expr.span().start,
                       end: self.tokens.get(self.pos - 1).unwrap().span.end,
                     };
@@ -588,6 +749,7 @@ impl Parser {
                 }
               } else {
                 let span = Span {
+                  file_id: self.file_id,
                   start: expr.span().start,
                   end: self.current().span.end,
                 };
@@ -610,7 +772,7 @@ impl Parser {
           self.pos += 1;
 
           if self.pos < self.tokens.len() {
-            let idx = self.parse_expression()?;
+            let idx = self.parse_expression(false)?;
 
             let end;
             if self.pos < self.tokens.len() {
@@ -634,6 +796,7 @@ impl Parser {
               Box::new(expr),
               Box::new(idx),
               Span {
+                file_id: self.file_id,
                 start: span.start,
                 end,
               },
@@ -648,7 +811,7 @@ impl Parser {
     Ok(expr)
   }
 
-  fn parse_operator(&mut self) -> Result<ParsedExpression> {
+  fn parse_operator(&mut self, assignable: bool) -> Result<ParsedExpression> {
     trace!("parse_operator: {:?}", self.current());
     let span = self.current().span;
 
@@ -673,9 +836,9 @@ impl Parser {
         self.pos += 1;
         Ok(ParsedExpression::Operator(BinaryOperator::Modulo, span))
       }
-      TokenKind::Equal => {
+      TokenKind::EqualEqual => {
         self.pos += 1;
-        Ok(ParsedExpression::Operator(BinaryOperator::Modulo, span))
+        Ok(ParsedExpression::Operator(BinaryOperator::Equals, span))
       }
       TokenKind::BangEqual => {
         self.pos += 1;
@@ -707,11 +870,27 @@ impl Parser {
         ))
       }
 
+      TokenKind::Equal => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::Assign, span))
+      }
       TokenKind::PlusEqual => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
         self.pos += 1;
         Ok(ParsedExpression::Operator(BinaryOperator::AddAssign, span))
       }
       TokenKind::MinusEqual => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
         self.pos += 1;
         Ok(ParsedExpression::Operator(
           BinaryOperator::SubtractAssign,
@@ -719,6 +898,10 @@ impl Parser {
         ))
       }
       TokenKind::AsteriskEqual => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
         self.pos += 1;
         Ok(ParsedExpression::Operator(
           BinaryOperator::MultiplyAssign,
@@ -726,6 +909,10 @@ impl Parser {
         ))
       }
       TokenKind::SlashEqual => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
         self.pos += 1;
         Ok(ParsedExpression::Operator(
           BinaryOperator::DivideAssign,
@@ -733,6 +920,10 @@ impl Parser {
         ))
       }
       TokenKind::PercentEqual => {
+        if !assignable {
+          return Err(Error::new(span, "assignment is not allowed here".into()));
+        }
+
         self.pos += 1;
         Ok(ParsedExpression::Operator(
           BinaryOperator::ModuloAssign,
@@ -773,7 +964,7 @@ impl Parser {
     let mut args = vec![];
     self.expect(TokenKind::OpenParen)?;
     while self.pos < self.tokens.len() && self.current().kind != TokenKind::CloseParen {
-      let argument = self.parse_expression()?;
+      let argument = self.parse_expression(false)?;
       args.push(argument);
       if self.current().kind == TokenKind::Comma {
         self.expect(TokenKind::Comma)?;

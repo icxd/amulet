@@ -1,0 +1,166 @@
+// native fn malloc(size: usz) -> void*;
+// native fn realloc(ptr: void*, new_size: usz) -> void*;
+// native fn free(ptr: void*);
+
+type Iterable<T> = interface {
+  fn iterator(self) -> Iterator<T>;
+};
+
+type Iterator<T> = interface {
+  fn has_next(self) -> bool;
+  fn next(mut self) -> T;
+};
+
+type Collection<T> = interface {
+  fn append(mut self, t: T);
+  fn pop(mut self) -> T;
+  fn at(self, pos: usz) -> T?;
+};
+
+type ArrayIterator<T> = class Iterator<T> {
+  mut array: Array<T>;
+  mut pos: usz = 0;
+
+  fn has_next(self) -> bool = self.pos < self.array.size;
+  fn next(mut self) -> T {
+    let item = self.array.at(self.pos);
+    self.pos += 1;
+    return item;
+  }
+};
+
+const INITIAL_ARRAY_CAP: usz = 16;
+
+type Array<T> = class Collection<T> & Iterable<T> {
+  mut data: T* = nullptr;
+  mut size: usz = 0;
+  mut capacity: usz = 0;
+  
+  fn iterator(self) -> Iterator<T> = ArrayIterator<T>();
+  
+  fn append(mut self, value: T) {
+    if (self.capacity == 0) {
+      self.data = malloc(sizeof T * INITIAL_ARRAY_CAP) as! T*;
+      self.capacity = INITIAL_ARRAY_CAP;
+    }
+    if (self.size >= self.capacity) {
+      self.capacity = self.capacity * 2;
+      self.data = realloc(self.data, sizeof T * self.capacity) as! T*;
+    }
+    self.data[self.size] = value;
+    self.size += 1;
+  }
+
+  fn pop(mut self) -> T { 
+    let item = self.data[self.size - 1];
+    self.size -= 1;
+    return item;
+  }
+  
+  fn at(self, pos: usz) -> T? {
+    if (self.data[pos] >= self.size) {
+      return null;
+    }
+    return self.data[pos];
+  }
+
+  // operator [](self, pos: usz) -> T? = self.at(pos);
+};
+
+native fn sbrk(n: usz) -> void*;
+
+type Block = class {
+  mut size: usz;
+  mut next: Block*;
+  mut is_free: bool;
+};
+
+type Allocator = class {
+  mut heap_start: Block* = nullptr;
+
+  fn find_free_block(self, mut last: Block**, size: usz) -> Block* {
+    mut current: Block* = self.heap_start;
+    while (current != nullptr && !(current.is_free && current.size >= size)) {
+      *last = current;
+      current = current.next;
+    }
+    return current;
+  }
+
+  fn request_memory(self, last: Block*, size: usz) -> Block* {
+    let block = sbrk(0) as! Block*;
+    let request = sbrk(size + sizeof Block);
+    if (request == (-1 as! void*))
+      return nullptr;
+    
+    block.size = size;
+    block.next = nullptr;
+    block.is_free = false;
+    if (last)
+      last.next = block;
+    
+    return block;
+  }
+
+  fn allocate(mut self, size: usz) -> void* {
+    mut block: Block*;
+    if (size <= 0)
+      return nullptr;
+
+    if (self.heap_start == nullptr) {
+      block = self.request_memory(nullptr, size);
+      if (block == nullptr)
+        return nullptr;
+      
+      self.heap_start = block;
+    } else {
+      let last = self.heap_start;
+      block = self.find_free_block(&last, size);
+      if (!block) {
+        block = self.request_memory(last, size);
+        if (block == nullptr)
+          return nullptr;
+      } else {
+        block.free = false;
+      }
+    }
+  
+    return block + 1;
+  }
+};
+
+type Mutex<T> = class {
+  let data: T;
+  mut locked: bool = false;
+
+  fn lock(mut self) -> T? {
+    if (self.locked) {
+      return null;
+    } else {
+      self.locked = true;
+      return self.data;
+    }
+  }
+
+  fn unlock(mut self) { self.locked = false; }
+};
+
+static mut GLOBAL_ALLOCATOR: Mutex<Allocator> =
+  Mutex<Allocator>(Allocator());
+
+fn allocate<T>() -> T* {
+  let allocator: Allocator? = GLOBAL_ALLOCATOR.lock();
+  if (allocator == null) {
+    GLOBAL_ALLOCATOR.unlock();
+    return nullptr;
+  }
+  
+  let memory = allocator.allocate(sizeof T) as! T*;
+  if (memory == nullptr) {
+    GLOBAL_ALLOCATOR.unlock();
+    return nullptr;
+  }
+
+  GLOBAL_ALLOCATOR.unlock();
+  return memory;
+}

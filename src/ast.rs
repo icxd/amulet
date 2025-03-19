@@ -1,8 +1,14 @@
 #![allow(dead_code)]
 
-use crate::span::Span;
+use crate::{
+  compiler::{
+    F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID,
+    ISZ_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID, USZ_TYPE_ID,
+  },
+  span::Span,
+};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NumericConstant {
   I8(i8),
   I16(i16),
@@ -20,11 +26,33 @@ pub enum NumericConstant {
   F64(f64),
 }
 
+impl NumericConstant {
+  pub(crate) fn type_id(&self) -> usize {
+    match self {
+      NumericConstant::I8(_) => I8_TYPE_ID,
+      NumericConstant::I16(_) => I16_TYPE_ID,
+      NumericConstant::I32(_) => I32_TYPE_ID,
+      NumericConstant::I64(_) => I64_TYPE_ID,
+      NumericConstant::I128(_) => I128_TYPE_ID,
+      NumericConstant::Isz(_) => ISZ_TYPE_ID,
+      NumericConstant::U8(_) => U8_TYPE_ID,
+      NumericConstant::U16(_) => U16_TYPE_ID,
+      NumericConstant::U32(_) => U32_TYPE_ID,
+      NumericConstant::U64(_) => U64_TYPE_ID,
+      NumericConstant::U128(_) => U128_TYPE_ID,
+      NumericConstant::Usz(_) => USZ_TYPE_ID,
+      NumericConstant::F32(_) => F32_TYPE_ID,
+      NumericConstant::F64(_) => F64_TYPE_ID,
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct ParsedNamespace {
   pub(crate) name: Option<String>,
   pub(crate) functions: Vec<ParsedFunction>,
   pub(crate) type_decls: Vec<ParsedTypeDecl>,
+  pub(crate) constants: Vec<ParsedConst>,
   pub(crate) namespaces: Vec<ParsedNamespace>,
 }
 
@@ -34,12 +62,29 @@ impl ParsedNamespace {
       name: None,
       functions: vec![],
       type_decls: vec![],
+      constants: vec![],
       namespaces: vec![],
     }
   }
 }
 
 #[derive(Debug)]
+pub struct ParsedConst {
+  pub(crate) name: String,
+  pub(crate) name_span: Span,
+  pub(crate) linkage: DefinitionLinkage,
+  pub(crate) r#type: ParsedType,
+  pub(crate) value: Option<ParsedExpression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedTypeArg {
+  pub(crate) name: String,
+  pub(crate) constraint: Option<ParsedType>,
+  pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ParsedCall {
   pub(crate) namespace: Vec<String>,
   pub(crate) name: String,
@@ -54,7 +99,7 @@ pub struct ParsedVariable {
   pub(crate) r#type: ParsedType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedVarDecl {
   pub(crate) name: String,
   pub(crate) ty: ParsedType,
@@ -62,21 +107,38 @@ pub struct ParsedVarDecl {
   pub(crate) span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
+pub enum DefinitionLinkage {
+  Internal,
+  External,
+  ImplicitConstructor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedFunctionAttribute {
+  CallConv(String),
+  NoReturn,
+}
+
 #[derive(Debug)]
 pub struct ParsedFunction {
   pub(crate) name: String,
   pub(crate) name_span: Span,
-  pub(crate) type_parameters: Vec<(String, Span)>,
+  pub(crate) linkage: DefinitionLinkage,
+  pub(crate) attributes: Vec<ParsedFunctionAttribute>,
+  pub(crate) type_parameters: Vec<ParsedTypeArg>,
   pub(crate) parameters: Vec<ParsedVariable>,
   pub(crate) return_type: Option<ParsedType>,
-  pub(crate) body: ParsedBlock,
+  pub(crate) body: Option<ParsedBlock>,
 }
 
 #[derive(Debug)]
 pub struct ParsedTypeDecl {
   pub(crate) name: String,
   pub(crate) name_span: Span,
-  pub(crate) type_parameters: Vec<(String, Span)>,
+  pub(crate) linkage: DefinitionLinkage,
+  pub(crate) type_parameters: Vec<ParsedTypeArg>,
   pub(crate) data: ParsedTypeDeclData,
 }
 
@@ -85,42 +147,54 @@ pub enum ParsedTypeDeclData {
   Interface(Vec<ParsedFunction>),
   Class {
     implements: Vec<ParsedType>,
-    fields: Vec<(ParsedVariable, Option<ParsedExpression>)>,
+    fields: Vec<(ParsedVarDecl, Option<ParsedExpression>)>,
     methods: Vec<ParsedFunction>,
   },
   Alias(ParsedType),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedBlock {
   pub(crate) stmts: Vec<ParsedStatement>,
+  pub(crate) span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParsedStatement {
-  VarDecl(ParsedVarDecl, ParsedExpression),
+  VarDecl(ParsedVarDecl, ParsedExpression, Span),
 
   Block(ParsedBlock),
-  If(ParsedExpression, ParsedBlock, Option<Box<ParsedBlock>>),
-  While(ParsedExpression, ParsedBlock),
+  If(
+    ParsedExpression,
+    ParsedBlock,
+    Option<Box<ParsedBlock>>,
+    Span,
+  ),
+  While(ParsedExpression, ParsedBlock, Span),
+  Loop(ParsedBlock, Span),
 
-  Break,
-  Continue,
-  Return(ParsedExpression),
+  // FIXME: This currently doesn't support using variables in the assembly code.
+  InlineAsm(Vec<String>, Span),
+
+  Break(Span),
+  Continue(Span),
+  Return(ParsedExpression, Span),
 
   Expression(ParsedExpression),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
   Null(Span),
   Nullptr(Span),
   Boolean(bool, Span),
   NumericConstant(NumericConstant, Span),
+  QuotedCString(String, Span),
   QuotedString(String, Span),
   CharacterLiteral(char, Span),
   Var(String, Span),
   NamespacedVar(Vec<String>, String, Span),
+  UnaryOp(Box<ParsedExpression>, UnaryOperator, Span),
   BinaryOp(
     Box<ParsedExpression>,
     BinaryOperator,
@@ -142,7 +216,7 @@ pub enum ParsedExpression {
   Garbage(Span),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParsedType {
   Name(String, Span),
   GenericType(String, Vec<ParsedType>, Span),
@@ -151,7 +225,7 @@ pub enum ParsedType {
   Empty,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOperator {
   Add,
   Subtract,
@@ -165,11 +239,17 @@ pub enum BinaryOperator {
   GreaterThan,
   GreaterThanEquals,
 
+  Assign,
   AddAssign,
   SubtractAssign,
   MultiplyAssign,
   DivideAssign,
   ModuloAssign,
+}
+
+#[derive(Debug, Clone)]
+pub enum UnaryOperator {
+  As(ParsedType),
 }
 
 impl ParsedExpression {
@@ -179,10 +259,12 @@ impl ParsedExpression {
       ParsedExpression::Nullptr(span) => *span,
       ParsedExpression::Boolean(_, span) => *span,
       ParsedExpression::NumericConstant(_, span) => *span,
+      ParsedExpression::QuotedCString(_, span) => *span,
       ParsedExpression::QuotedString(_, span) => *span,
       ParsedExpression::CharacterLiteral(_, span) => *span,
       ParsedExpression::Var(_, span) => *span,
       ParsedExpression::NamespacedVar(_, _, span) => *span,
+      ParsedExpression::UnaryOp(_, _, span) => *span,
       ParsedExpression::BinaryOp(_, _, _, span) => *span,
       ParsedExpression::IndexedExpression(_, _, span) => *span,
       ParsedExpression::IndexedStruct(_, _, span) => *span,
@@ -217,13 +299,13 @@ impl ParsedExpression {
       // ParsedExpression::Operator(BinaryOperator::LogicalAnd, _) => 70,
       // ParsedExpression::Operator(BinaryOperator::LogicalOr, _)
       // | ParsedExpression::Operator(BinaryOperator::NoneCoalescing, _) => 69,
-      // ParsedExpression::Operator(BinaryOperator::Assign, _)
+      ParsedExpression::Operator(BinaryOperator::Assign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseAndAssign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseOrAssign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseXorAssign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseLeftShiftAssign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseRightShiftAssign, _)
-      ParsedExpression::Operator(BinaryOperator::AddAssign, _)
+      | ParsedExpression::Operator(BinaryOperator::AddAssign, _)
       | ParsedExpression::Operator(BinaryOperator::SubtractAssign, _)
       | ParsedExpression::Operator(BinaryOperator::MultiplyAssign, _)
       | ParsedExpression::Operator(BinaryOperator::ModuloAssign, _)

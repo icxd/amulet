@@ -1,0 +1,10 @@
+type MyType = class {
+  let a: i32;
+  let b: string;
+  mut c: bool;
+}
+
+fn main() {
+  let data = reflect MyType;
+  
+}

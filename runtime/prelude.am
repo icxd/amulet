@@ -1,0 +1,69 @@
+// native fn malloc(size: usz) -> void*;
+// native fn realloc(ptr: void*, new_size: usz) -> void*;
+// native fn free(ptr: void*);
+
+type Iterable<T> = interface {
+  fn iterator(self) -> Iterator<T>;
+};
+
+type Iterator<T> = interface {
+  fn has_next(self) -> bool;
+  fn next(mut self) -> T;
+};
+
+type Collection<T> = interface {
+  fn append(mut self, t: T);
+  fn pop(mut self) -> T;
+  fn at(self, pos: usz) -> T?;
+};
+
+type ArrayIterator<T> = class Iterator<T> {
+  mut array: Array<T>;
+  mut pos: usz = 0;
+
+  fn has_next(self) -> bool = self.pos < self.array.size;
+  fn next(mut self) -> T {
+    let item = self.array.at(self.pos);
+    self.pos += 1;
+    return item;
+  }
+};
+
+const INITIAL_ARRAY_CAP: usz = 16;
+
+type Array<T> = class Collection<T> & Iterable<T> {
+  mut data: T* = nullptr;
+  mut size: usz = 0;
+  mut capacity: usz = 0;
+  
+  fn iterator(self) -> Iterator<T> = ArrayIterator<T>();
+  
+  fn append(mut self, value: T) {
+    if (self.capacity == 0) {
+      self.data = malloc(sizeof T * INITIAL_ARRAY_CAP) as! T*;
+      self.capacity = INITIAL_ARRAY_CAP;
+    }
+    if (self.size >= self.capacity) {
+      self.capacity = self.capacity * 2;
+      self.data = realloc(self.data, sizeof T * self.capacity) as! T*;
+    }
+    self.data[self.size] = value;
+    self.size += 1;
+  }
+
+  fn pop(mut self) -> T { 
+    let item = self.data[self.size - 1];
+    self.size -= 1;
+    return item;
+  }
+  
+  fn at(self, pos: usz) -> T? {
+    if (self.data[pos] >= self.size) {
+      return null;
+    }
+    return self.data[pos];
+  }
+
+  // operator [](self, pos: usz) -> T? = self.at(pos);
+};
+

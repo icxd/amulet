@@ -1,66 +1,37 @@
+use std::path::PathBuf;
+
+use clap::Parser;
+use compiler::Compiler;
+use error::display_error;
+
 pub mod ast;
 pub mod checker;
+pub mod codegen;
+pub mod compiler;
 pub mod error;
 pub mod parser;
 pub mod span;
 pub mod tokenizer;
 
-fn main() {
-  env_logger::init();
+#[derive(Parser, Debug, Clone)]
+#[command(version, about, long_about = None)]
+pub struct Opts {
+  files: Vec<PathBuf>,
 
-  let mut args = std::env::args();
-  args.next();
-  let path = args.next().unwrap();
-  let source = std::fs::read_to_string(path.clone()).unwrap();
-  let mut tokenizer = tokenizer::Tokenizer::new(source.clone());
-  match tokenizer.tokenize() {
-    Ok(tokens) => {
-      let mut parser = parser::Parser::new(tokens);
-      let namespace = parser.parse();
-      if let Ok(namespace) = namespace {
-        println!("{:#?}", namespace);
-      } else {
-        let err = namespace.unwrap_err();
-        error::display_error(&err, &source, &path);
-        std::process::exit(1);
-      }
-    }
-    Err(err) => {
-      error::display_error(&err, &source, &path);
-    }
-  }
+  #[arg(long, default_value_t = false)]
+  nostdlib: bool,
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use tokenizer::{TokenKind, Tokenizer};
+fn main() {
+  let opts = Opts::parse();
+  env_logger::init();
 
-  #[test]
-  fn test_tokenize() {
-    let source = "
-      fn main() {
-        println(\"Hello, World!\");
-      }
-    ";
-    let mut tokenizer = Tokenizer::new(source.to_string());
-    let tokens = tokenizer.tokenize().unwrap();
-    let tokens = tokens.iter().map(|t| t.kind.clone()).collect::<Vec<_>>();
-    assert_eq!(
-      tokens,
-      vec![
-        TokenKind::KwFn,
-        TokenKind::Identifier,
-        TokenKind::OpenParen,
-        TokenKind::CloseParen,
-        TokenKind::OpenBrace,
-        TokenKind::Identifier,
-        TokenKind::OpenParen,
-        TokenKind::String,
-        TokenKind::CloseParen,
-        TokenKind::Semicolon,
-        TokenKind::CloseBrace,
-      ]
-    );
+  let mut compiler = Compiler::new(&opts);
+  for file in &opts.files {
+    let path = file.to_str().unwrap().to_string();
+    if let Err(error) = compiler.compile_file(path.clone()) {
+      let source = &compiler.files[compiler.files.len() - 1].1;
+      display_error(&error, source.as_str(), path.as_str());
+    };
   }
 }
