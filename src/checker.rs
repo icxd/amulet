@@ -2,11 +2,13 @@ use std::collections::HashMap;
 
 use crate::{
   ast::{
-    BinaryOperator, DefinitionLinkage, NumericConstant, ParsedBlock, ParsedCall, ParsedExpression,
-    ParsedFunction, ParsedNamespace, ParsedStatement, ParsedType, ParsedTypeDecl,
-    ParsedTypeDeclData,
+    BinaryOperator, DefinitionLinkage, IntegerConstant, NumericConstant, ParsedBlock, ParsedCall,
+    ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
+    ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
   },
-  compiler::{BOOL_TYPE_ID, STRING_TYPE_ID, U8_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID},
+  compiler::{
+    BOOL_TYPE_ID, CCHAR_TYPE_ID, STRING_TYPE_ID, U8_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID,
+  },
   error::{Error, Result},
   span::Span,
 };
@@ -138,17 +140,25 @@ pub struct CheckedCall {
 }
 
 #[derive(Debug, Clone)]
+pub enum CheckedUnaryOperator {
+  Dereference,
+  As(TypeId),
+}
+
+#[derive(Debug, Clone)]
 pub enum CheckedExpression {
   Null(Span, TypeId),
   Nullptr(Span, TypeId),
   Boolean(bool, Span),
   NumericConstant(NumericConstant, TypeId, Span),
   QuotedString(String, Span),
+  QuotedCString(String, Span),
   CharacterLiteral(char, Span),
 
   Variable(CheckedVariable, Span),
   NamespacedVariable(Vec<CheckedNamespace>, CheckedVariable, Span),
 
+  UnaryOp(Box<CheckedExpression>, CheckedUnaryOperator, TypeId, Span),
   BinaryOp(
     Box<CheckedExpression>,
     BinaryOperator,
@@ -164,17 +174,21 @@ pub enum CheckedExpression {
   MethodCall(Box<CheckedExpression>, CheckedCall, TypeId, Span),
 }
 impl CheckedExpression {
-  fn type_id(&self) -> TypeId {
+  pub fn type_id(&self, project: &mut Project) -> TypeId {
     match self {
       CheckedExpression::Null(_, type_id) => *type_id,
       CheckedExpression::Nullptr(_, type_id) => *type_id,
       CheckedExpression::Boolean(_, _) => BOOL_TYPE_ID,
       CheckedExpression::NumericConstant(_, type_id, _) => *type_id,
       CheckedExpression::QuotedString(_, _) => STRING_TYPE_ID,
+      CheckedExpression::QuotedCString(_, _) => {
+        project.find_or_add_type_id(CheckedType::RawPtr(CCHAR_TYPE_ID, Span::default()))
+      }
       CheckedExpression::CharacterLiteral(_, _) => U8_TYPE_ID,
       CheckedExpression::Variable(var, _) => var.type_id,
       CheckedExpression::NamespacedVariable(_, var, _) => var.type_id,
-      CheckedExpression::BinaryOp(_, _, right, _, _) => right.type_id(),
+      CheckedExpression::UnaryOp(_, _, type_id, _) => *type_id,
+      CheckedExpression::BinaryOp(_, _, right, _, _) => right.type_id(project),
       CheckedExpression::IndexedExpression(_, _, type_id, _) => *type_id,
       CheckedExpression::FieldAccess(_, _, type_id, _) => *type_id,
       CheckedExpression::Call(_, type_id, _) => *type_id,
@@ -188,6 +202,22 @@ impl CheckedExpression {
       CheckedExpression::IndexedExpression(expr, _, _, _) => expr.is_mutable(),
       CheckedExpression::FieldAccess(expr, _, _, _) => expr.is_mutable(),
       _ => false,
+    }
+  }
+
+  pub fn to_integer_constant(&self) -> Option<IntegerConstant> {
+    match self {
+      CheckedExpression::NumericConstant(constant, _, _) => constant.integer_constant(),
+      CheckedExpression::UnaryOp(value, CheckedUnaryOperator::As(_), type_id, _) => {
+        if !is_integer(*type_id) {
+          return None;
+        }
+        match &**value {
+          CheckedExpression::NumericConstant(constant, _, _) => constant.integer_constant(),
+          _ => None,
+        }
+      }
+      _ => None,
     }
   }
 }
@@ -206,10 +236,13 @@ pub enum CheckedStatement {
     condition: CheckedExpression,
     block: CheckedBlock,
   },
+  Loop(CheckedBlock),
 
   Break(Span),
   Continue(Span),
   Return(CheckedExpression),
+
+  InlineAsm(Vec<String>, Span),
 
   Expression(CheckedExpression),
 }
@@ -229,7 +262,7 @@ impl CheckedBlock {
   }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum CheckedType {
   Builtin(Span),
   TypeVariable(String, Option<TypeId>, Span),
@@ -237,6 +270,22 @@ pub enum CheckedType {
   TypeDecl(TypeDeclId, Span),
   RawPtr(TypeId, Span),
 }
+
+impl PartialEq for CheckedType {
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (CheckedType::Builtin(_), CheckedType::Builtin(_)) => true,
+      (CheckedType::TypeVariable(a, _, _), CheckedType::TypeVariable(b, _, _)) => a == b,
+      (CheckedType::GenericInstance(a, ap, _), CheckedType::GenericInstance(b, bp, _)) => {
+        a == b && ap == bp
+      }
+      (CheckedType::TypeDecl(a, _), CheckedType::TypeDecl(b, _)) => a == b,
+      (CheckedType::RawPtr(a, _), CheckedType::RawPtr(b, _)) => a == b,
+      _ => false,
+    }
+  }
+}
+
 impl CheckedType {
   fn span(&self) -> Span {
     match self {
@@ -329,6 +378,7 @@ impl Project {
         CheckedType::Builtin(Span::default()), // F64
         CheckedType::Builtin(Span::default()), // String
         CheckedType::Builtin(Span::default()), // Bool
+        CheckedType::Builtin(Span::default()), // CChar
       ],
       current_function_index: None,
     }
@@ -336,7 +386,6 @@ impl Project {
 
   pub fn create_scope(&mut self, parent_id: ScopeId) -> ScopeId {
     self.scopes.push(Scope::new(Some(parent_id)));
-
     self.scopes.len() - 1
   }
 
@@ -348,7 +397,6 @@ impl Project {
     }
 
     self.types.push(ty);
-
     self.types.len() - 1
   }
 
@@ -544,6 +592,7 @@ impl Project {
         crate::compiler::F64_TYPE_ID => "f64".to_string(),
         crate::compiler::STRING_TYPE_ID => "string".to_string(),
         crate::compiler::BOOL_TYPE_ID => "bool".to_string(),
+        crate::compiler::CCHAR_TYPE_ID => "c_char".to_string(),
         _ => "unknown".to_string(),
       },
       CheckedType::TypeDecl(type_decl_id, _) => {
@@ -1053,7 +1102,7 @@ fn typecheck_function(
 
   let return_type_id = if function_return_type_id == UNKNOWN_TYPE_ID {
     if let Some(CheckedStatement::Return(ret)) = block.stmts.last() {
-      ret.type_id()
+      ret.type_id(project)
     } else {
       VOID_TYPE_ID
     }
@@ -1069,6 +1118,27 @@ fn typecheck_function(
       function.name_span,
       "control reaches end of non-void function".into(),
     ));
+  }
+
+  if function_linkage != DefinitionLinkage::External && !block.definitely_returns {
+    // Check if the last statement is an infinite loop
+    let mut is_infinite_loop = false;
+    if let Some(CheckedStatement::Loop(block)) = block.stmts.last() {
+      for stmt in &block.stmts {
+        let (CheckedStatement::Break(_) | CheckedStatement::Continue(_)) = stmt else {
+          is_infinite_loop = true;
+          break;
+        };
+      }
+    }
+
+    if is_infinite_loop
+      && !function
+        .attributes
+        .contains(&ParsedFunctionAttribute::NoReturn)
+    {
+      return Err(Error::new(function.name_span, "infinite loop".into()));
+    }
   }
 
   let checked_function = &mut project.functions[function_id];
@@ -1112,7 +1182,7 @@ fn typecheck_method(
 
   let return_type_id = if function_return_type_id == UNKNOWN_TYPE_ID {
     if let Some(CheckedStatement::Return(ret)) = block.stmts.last() {
-      ret.type_id()
+      ret.type_id(project)
     } else {
       VOID_TYPE_ID
     }
@@ -1179,8 +1249,8 @@ fn typecheck_statement(
     ParsedStatement::VarDecl(var_decl, expr, span) => {
       let mut checked_type_id = typecheck_typename(&var_decl.ty, scope_id, project)?;
       let checked_expr = typecheck_expression(expr, scope_id, Some(checked_type_id), project)?;
-      if checked_type_id == UNKNOWN_TYPE_ID && checked_expr.type_id() != UNKNOWN_TYPE_ID {
-        checked_type_id = checked_expr.type_id();
+      if checked_type_id == UNKNOWN_TYPE_ID && checked_expr.type_id(project) != UNKNOWN_TYPE_ID {
+        checked_type_id = checked_expr.type_id(project);
       }
 
       let checked_var_decl = CheckedVarDecl {
@@ -1204,18 +1274,18 @@ fn typecheck_statement(
     }
 
     ParsedStatement::Block(block) => {
-      let mut block = typecheck_block(block, scope_id, project)?;
+      let block = typecheck_block(block, scope_id, project)?;
       Ok(CheckedStatement::Block(block))
     }
 
     ParsedStatement::If(condition, then_block, else_block, span) => {
       let condition = typecheck_expression(condition, scope_id, None, project)?;
 
-      let mut then_block = typecheck_block(then_block, scope_id, project)?;
+      let then_block = typecheck_block(then_block, scope_id, project)?;
 
-      let mut checked_else_block = None;
+      let checked_else_block = None;
       if let Some(else_block) = else_block {
-        let mut checked_else_block = Some(typecheck_block(else_block, scope_id, project)?);
+        let checked_else_block = Some(typecheck_block(else_block, scope_id, project)?);
       }
 
       Ok(CheckedStatement::If {
@@ -1228,17 +1298,17 @@ fn typecheck_statement(
     ParsedStatement::While(condition, block, span) => {
       let condition = typecheck_expression(condition, scope_id, None, project)?;
 
-      let mut block = typecheck_block(block, scope_id, project)?;
+      let block = typecheck_block(block, scope_id, project)?;
 
       Ok(CheckedStatement::While { condition, block })
     }
 
     ParsedStatement::Loop(block, _span) => {
       let block = typecheck_block(block, scope_id, project)?;
-      Ok(CheckedStatement::Block(block))
+      Ok(CheckedStatement::Loop(block))
     }
 
-    ParsedStatement::InlineAsm(asm, span) => todo!("inline asm"),
+    ParsedStatement::InlineAsm(asm, span) => Ok(CheckedStatement::InlineAsm(asm.to_vec(), *span)),
 
     ParsedStatement::Break(span) => Ok(CheckedStatement::Break(*span)),
 
@@ -1407,7 +1477,7 @@ fn typecheck_call(
     }
 
     if let Some(this_expr) = this_expr {
-      let type_id = this_expr.type_id();
+      let type_id = this_expr.type_id(project);
       let param_type = &project.types[type_id];
 
       if let CheckedType::GenericInstance(type_decl_id, args, span) = param_type {
@@ -1461,7 +1531,7 @@ fn typecheck_call(
         .expect("internal error: previously resolved call is now unresolved");
 
         let lhs_type_id = callee.params[idx + arg_offset].type_id;
-        let rhs_type_id = checked_arg.type_id();
+        let rhs_type_id = checked_arg.type_id(project);
 
         check_types_for_compat(
           lhs_type_id,
@@ -1525,6 +1595,44 @@ fn typecheck_call(
   })
 }
 
+fn is_integer(type_id: TypeId) -> bool {
+  matches!(
+    type_id,
+    crate::compiler::I8_TYPE_ID
+      | crate::compiler::I16_TYPE_ID
+      | crate::compiler::I32_TYPE_ID
+      | crate::compiler::I64_TYPE_ID
+      | crate::compiler::I128_TYPE_ID
+      | crate::compiler::ISZ_TYPE_ID
+      | crate::compiler::U8_TYPE_ID
+      | crate::compiler::U16_TYPE_ID
+      | crate::compiler::U32_TYPE_ID
+      | crate::compiler::U64_TYPE_ID
+      | crate::compiler::U128_TYPE_ID
+      | crate::compiler::USZ_TYPE_ID
+  )
+}
+
+fn try_promote_constant_expr_to_type(
+  lhs_type_id: TypeId,
+  checked_rhs: &mut CheckedExpression,
+  span: &Span,
+) -> Result<()> {
+  if !is_integer(lhs_type_id) {
+    return Ok(());
+  }
+
+  if let Some(rhs_constant) = checked_rhs.to_integer_constant() {
+    if let (Some(new_constant), new_type_id) = rhs_constant.promote(lhs_type_id) {
+      *checked_rhs = CheckedExpression::NumericConstant(new_constant, new_type_id, *span);
+    } else {
+      return Err(Error::new(*span, "integer promotion failed".to_string()));
+    }
+  }
+
+  Ok(())
+}
+
 fn typecheck_expression(
   expr: &ParsedExpression,
   scope_id: ScopeId,
@@ -1568,6 +1676,12 @@ fn typecheck_expression(
       ))
     }
 
+    ParsedExpression::Boolean(value, span) => Ok(CheckedExpression::Boolean(*value, *span)),
+
+    ParsedExpression::QuotedCString(s, span) => {
+      Ok(CheckedExpression::QuotedCString(s.clone(), *span))
+    }
+
     ParsedExpression::Var(name, span) => {
       if let Some(var) = project.find_var_in_scope(scope_id, name) {
         let _ = unify_with_type_hint(project, &var.type_id)?;
@@ -1587,8 +1701,9 @@ fn typecheck_expression(
 
     ParsedExpression::MethodCall(expr, call, span) => {
       let checked_expr = typecheck_expression(expr, scope_id, None, project)?;
+      let checked_expr_type_id = checked_expr.type_id(project);
 
-      let checked_expr_type = &project.types[checked_expr.type_id()];
+      let checked_expr_type = &project.types[checked_expr_type_id];
       match checked_expr_type {
         CheckedType::TypeDecl(type_decl_id, _) => {
           let type_decl_id = *type_decl_id;
@@ -1615,7 +1730,7 @@ fn typecheck_expression(
           expr.span(),
           format!(
             "no methods available on type `{}`",
-            project.typename_for_type_id(checked_expr.type_id())
+            project.typename_for_type_id(checked_expr_type_id)
           ),
         )),
       }
@@ -1623,7 +1738,9 @@ fn typecheck_expression(
 
     ParsedExpression::BinaryOp(lhs, op, rhs, span) => {
       let checked_lhs = typecheck_expression(lhs, scope_id, None, project)?;
-      let checked_rhs = typecheck_expression(rhs, scope_id, None, project)?;
+
+      let mut checked_rhs = typecheck_expression(rhs, scope_id, None, project)?;
+      try_promote_constant_expr_to_type(checked_lhs.type_id(project), &mut checked_rhs, span)?;
 
       let type_id =
         typecheck_binary_operator(&checked_lhs, op.clone(), &checked_rhs, *span, project)?;
@@ -1638,11 +1755,25 @@ fn typecheck_expression(
       ))
     }
 
+    ParsedExpression::UnaryOp(expr, op, span) => {
+      let checked_expr = typecheck_expression(expr, scope_id, None, project)?;
+
+      let checked_op = match op {
+        UnaryOperator::As(type_name) => {
+          let type_id = typecheck_typename(type_name, scope_id, project)?;
+          CheckedUnaryOperator::As(type_id)
+        }
+      };
+
+      let checked_expr = typecheck_unary_operation(&checked_expr, checked_op, *span, project)?;
+      Ok(checked_expr)
+    }
+
     ParsedExpression::IndexedExpression(expr, idx, span) => {
       let checked_expr = typecheck_expression(expr, scope_id, None, project)?;
       let checked_idx = typecheck_expression(idx, scope_id, None, project)?;
 
-      let expr_type_id = checked_expr.type_id();
+      let expr_type_id = checked_expr.type_id(project);
 
       match project.types[expr_type_id] {
         CheckedType::RawPtr(type_id, span) => {
@@ -1671,6 +1802,37 @@ fn typecheck_expression(
   }
 }
 
+fn typecheck_unary_operation(
+  expr: &CheckedExpression,
+  op: CheckedUnaryOperator,
+  span: Span,
+  project: &mut Project,
+) -> Result<CheckedExpression> {
+  let expr_type_id = expr.type_id(project);
+  let expr_type = &project.types[expr_type_id];
+
+  match op {
+    CheckedUnaryOperator::As(type_id) => Ok(CheckedExpression::UnaryOp(
+      Box::new(expr.clone()),
+      op,
+      type_id,
+      span,
+    )),
+    CheckedUnaryOperator::Dereference => match expr_type {
+      CheckedType::RawPtr(x, _) => Ok(CheckedExpression::UnaryOp(
+        Box::new(expr.clone()),
+        op,
+        *x,
+        span,
+      )),
+      _ => Err(Error::new(
+        span,
+        "dereference of a non-pointer value".to_string(),
+      )),
+    },
+  }
+}
+
 fn typecheck_binary_operator(
   lhs: &CheckedExpression,
   op: BinaryOperator,
@@ -1678,10 +1840,10 @@ fn typecheck_binary_operator(
   span: Span,
   project: &mut Project,
 ) -> Result<TypeId> {
-  let lhs_type_id = lhs.type_id();
-  let rhs_type_id = rhs.type_id();
+  let lhs_type_id = lhs.type_id(project);
+  let rhs_type_id = rhs.type_id(project);
 
-  let mut type_id = lhs.type_id();
+  let mut type_id = lhs.type_id(project);
   match op {
     BinaryOperator::LessThan
     | BinaryOperator::LessThanEquals
@@ -1887,7 +2049,6 @@ pub fn check_types_for_compat(
         CheckedType::GenericInstance(rhs_type_decl_id, rhs_args, _) => {
           if lhs_type_decl_id == rhs_type_decl_id {
             let rhs_args = rhs_args.clone();
-            // Same struct, perhaps this is an instantiation of it
 
             let lhs_struct = &project.type_decls[*lhs_type_decl_id];
             if rhs_args.len() != lhs_args.len() {
@@ -1921,7 +2082,6 @@ pub fn check_types_for_compat(
         }
         _ => {
           if rhs_type_id != lhs_type_id {
-            // They're the same type, might be okay to just leave now
             return Err(Error::new(
               span,
               format!(
@@ -1936,7 +2096,6 @@ pub fn check_types_for_compat(
     }
     CheckedType::TypeDecl(lhs_type_decl_id, _) => {
       if rhs_type_id == lhs_type_id {
-        // They're the same type, might be okay to just leave now
         return Ok(());
       }
 
@@ -1945,7 +2104,6 @@ pub fn check_types_for_compat(
         CheckedType::GenericInstance(rhs_type_decl_id, args, _) => {
           if lhs_type_decl_id == rhs_type_decl_id {
             let args = args.clone();
-            // Same struct, perhaps this is an instantiation of it
 
             let lhs_struct = &project.type_decls[*lhs_type_decl_id];
             if args.len() != lhs_struct.generic_parameters.len() {
@@ -1979,7 +2137,6 @@ pub fn check_types_for_compat(
         }
         _ => {
           if rhs_type_id != lhs_type_id {
-            // They're the same type, might be okay to just leave now
             return Err(Error::new(
               span,
               format!(
@@ -1997,9 +2154,11 @@ pub fn check_types_for_compat(
         return Err(Error::new(
           span,
           format!(
-            "type mismatch: expected {}, but got {}",
+            "type mismatch: expected {} ({}), but got {} ({})",
             project.typename_for_type_id(lhs_type_id),
+            lhs_type_id,
             project.typename_for_type_id(rhs_type_id),
+            rhs_type_id,
           ),
         ));
       }
@@ -2021,14 +2180,17 @@ pub fn typecheck_typename(
       "i16" => Ok(crate::compiler::I16_TYPE_ID),
       "i32" => Ok(crate::compiler::I32_TYPE_ID),
       "i64" => Ok(crate::compiler::I64_TYPE_ID),
+      "i128" => Ok(crate::compiler::I128_TYPE_ID),
       "isz" => Ok(crate::compiler::ISZ_TYPE_ID),
       "u8" => Ok(crate::compiler::U8_TYPE_ID),
       "u16" => Ok(crate::compiler::U16_TYPE_ID),
       "u32" => Ok(crate::compiler::U32_TYPE_ID),
       "u64" => Ok(crate::compiler::U64_TYPE_ID),
+      "u128" => Ok(crate::compiler::U128_TYPE_ID),
       "usz" => Ok(crate::compiler::USZ_TYPE_ID),
       "string" => Ok(crate::compiler::STRING_TYPE_ID),
       "bool" => Ok(crate::compiler::BOOL_TYPE_ID),
+      "c_char" => Ok(crate::compiler::CCHAR_TYPE_ID),
       x => {
         let type_id = project.find_type_in_scope(scope_id, x);
         match type_id {

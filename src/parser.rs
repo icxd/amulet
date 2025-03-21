@@ -456,10 +456,12 @@ impl Parser {
 
       TokenKind::KwBreak => {
         let span = self.expect(TokenKind::KwBreak)?.span;
+        self.expect(TokenKind::Semicolon)?;
         Ok(ParsedStatement::Break(span))
       }
       TokenKind::KwContinue => {
         let span = self.expect(TokenKind::KwContinue)?.span;
+        self.expect(TokenKind::Semicolon)?;
         Ok(ParsedStatement::Continue(span))
       }
 
@@ -641,6 +643,15 @@ impl Parser {
         self.pos += 1;
         let string = self.expect(TokenKind::String)?;
         ParsedExpression::QuotedCString(string.literal, string.span)
+      }
+
+      TokenKind::Identifier if name == "true" => {
+        self.pos += 1;
+        ParsedExpression::Boolean(true, span)
+      }
+      TokenKind::Identifier if name == "false" => {
+        self.pos += 1;
+        ParsedExpression::Boolean(false, span)
       }
 
       TokenKind::Identifier => {
@@ -1012,15 +1023,18 @@ impl Parser {
       "i32" => Ok(ParsedType::Name("i32".to_string(), token.span)),
       "i64" => Ok(ParsedType::Name("i64".to_string(), token.span)),
       "isz" => Ok(ParsedType::Name("isz".to_string(), token.span)),
+      "i128" => Ok(ParsedType::Name("i128".to_string(), token.span)),
       "u8" => Ok(ParsedType::Name("u8".to_string(), token.span)),
       "u16" => Ok(ParsedType::Name("u16".to_string(), token.span)),
       "u32" => Ok(ParsedType::Name("u32".to_string(), token.span)),
       "u64" => Ok(ParsedType::Name("u64".to_string(), token.span)),
+      "u128" => Ok(ParsedType::Name("u128".to_string(), token.span)),
       "usz" => Ok(ParsedType::Name("usz".to_string(), token.span)),
       "f32" => Ok(ParsedType::Name("f32".to_string(), token.span)),
       "f64" => Ok(ParsedType::Name("f64".to_string(), token.span)),
       "bool" => Ok(ParsedType::Name("bool".to_string(), token.span)),
       "string" => Ok(ParsedType::Name("string".to_string(), token.span)),
+      "c_char" => Ok(ParsedType::Name("c_char".to_string(), token.span)),
       "void" => Ok(ParsedType::Name("void".to_string(), token.span)),
       "any" => Ok(ParsedType::Name("any".to_string(), token.span)),
       "never" => Ok(ParsedType::Name("never".to_string(), token.span)),

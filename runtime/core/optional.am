@@ -1,4 +1,8 @@
-type Optional<T> = class {
-  let value: T;
+// type Optional<T> = class {
+//   let value: T;
+//   let is_some: bool;
+// };
+type Optional = class {
+  let value: i32;
   let is_some: bool;
 };

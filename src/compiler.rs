@@ -1,6 +1,10 @@
+use std::path::PathBuf;
+
+use inkwell::context::Context;
+
 use crate::{
   checker::{typecheck_namespace, CheckedType, Project, Scope},
-  codegen::codegen,
+  codegen::{self, CodeGen},
   error::Result,
   parser::Parser,
   span::Span,
@@ -26,7 +30,8 @@ pub(crate) const F32_TYPE_ID: usize = 14;
 pub(crate) const F64_TYPE_ID: usize = 15;
 pub(crate) const STRING_TYPE_ID: usize = 16;
 pub(crate) const BOOL_TYPE_ID: usize = 17;
-pub(crate) const COUNT_TYPE_IDS: usize = 18;
+pub(crate) const CCHAR_TYPE_ID: usize = 18;
+pub(crate) const COUNT_TYPE_IDS: usize = 19;
 
 pub type FileId = usize;
 
@@ -51,28 +56,11 @@ impl Compiler {
     }
   }
 
-  pub fn include_prelude(&mut self, project: &mut Project) -> Result<()> {
+  pub fn include_runtime(&mut self, project: &mut Project) -> Result<()> {
     for _ in 0..COUNT_TYPE_IDS {
       project.types.push(CheckedType::Builtin(Span::default()));
     }
 
-    let prelude_contents = Compiler::get_prelude();
-    self
-      .files
-      .push(("<prelude>".into(), prelude_contents.clone()));
-
-    let mut tokenizer = Tokenizer::new(self.files.len() - 1, prelude_contents);
-    let tokens = tokenizer.tokenize()?;
-
-    let mut parser = Parser::new(self.files.len() - 1, tokens);
-    let parsed_namespace = parser.parse()?;
-
-    typecheck_namespace(&parsed_namespace, 0, project)?;
-
-    Ok(())
-  }
-
-  pub fn include_runtime(&mut self, project: &mut Project) -> Result<()> {
     let runtime = if self.opts.nostdlib {
       self.get_core_lib()
     } else {
@@ -92,6 +80,12 @@ impl Compiler {
       let parsed_namespace = parser.parse()?;
 
       typecheck_namespace(&parsed_namespace, 0, project)?;
+
+      let path = PathBuf::from(name.clone()).with_extension("ll");
+      let context = Context::create();
+      let mut gen = CodeGen::new(self.opts.clone(), &path.display().to_string(), &context);
+      // codegen::compile(&mut gen, project)?;
+      // gen.module.print_to_file(path).unwrap();
     }
 
     Ok(())
@@ -118,37 +112,38 @@ impl Compiler {
 
     typecheck_namespace(&parsed_namespace, file_scope_id, project)?;
 
-    let output = codegen(project, &project.scopes[file_scope_id]);
-    std::fs::write(format!("{path}.cpp"), output).expect("guh");
+    let path = PathBuf::from(path.clone()).with_extension("ll");
+    let context = Context::create();
+    let mut gen = CodeGen::new(self.opts.clone(), &path.display().to_string(), &context);
+    // codegen::compile(&mut gen, project)?;
+    // gen.module.print_to_file(path).unwrap();
 
     Ok(())
   }
 
-  pub fn get_prelude() -> String {
-    include_str!("../runtime/prelude.am").to_string()
-  }
-
   pub fn get_core_lib(&mut self) -> Vec<(String, String)> {
-    std::fs::read_dir(CORE_LIB_PATH)
-      .unwrap()
-      .map(|entry| {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        let contents = std::fs::read_to_string(path).unwrap();
-        (name, contents)
-      })
-      .collect()
+    let mut files = vec![];
+    for entry in std::fs::read_dir(CORE_LIB_PATH).unwrap() {
+      let path = entry.unwrap().path();
+      if path.extension().is_some() && path.extension().unwrap() != "am" {
+        continue;
+      }
+      let contents = std::fs::read_to_string(path.clone()).unwrap();
+      files.push((path.display().to_string(), contents));
+    }
+    files
   }
 
   pub fn get_std_lib(&mut self) -> Vec<(String, String)> {
-    std::fs::read_dir(STD_LIB_PATH)
-      .unwrap()
-      .map(|entry| {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        let contents = std::fs::read_to_string(path).unwrap();
-        (name, contents)
-      })
-      .collect()
+    let mut files = vec![];
+    for entry in std::fs::read_dir(STD_LIB_PATH).unwrap() {
+      let path = entry.unwrap().path();
+      if path.extension().is_some() && path.extension().unwrap() != "am" {
+        continue;
+      }
+      let contents = std::fs::read_to_string(path.clone()).unwrap();
+      files.push((path.display().to_string(), contents));
+    }
+    files
   }
 }

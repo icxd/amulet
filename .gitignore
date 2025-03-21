@@ -1,10 +1,4 @@
 /target
-/.cache
-/build
-
 Cargo.lock
-CMakeLists.txt
-compile_commands.json
 
-*.asm
-*.cpp
+*.ll

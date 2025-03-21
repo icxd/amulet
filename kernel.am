@@ -1,29 +1,27 @@
-fn strlen(s: u8*) -> usz {
+fn strlen(s: c_char*) -> usz {
   mut i: usz = 0;
-  while s[i] != 0 {
+  while s[i] != 0 as c_char {
     i += 1;
   }
   return i;
 }
 
-fn kmain() callconv(C) noreturn {
-  // Define the VGA buffer
+fn hang() noreturn {
+  loop {
+    asm { "cli" "hlt" }
+  }
+}
+
+fn kmain() callconv(C) {
   mut video_buffer = 0xb8000 as u8*;
-  // Define the text to be displayed
   let text = c"Hello, world!\n";
 
-  // Print the text to the screen
   mut i: usz = 0;
   while i < strlen(text) {
-    // Write character
-    video_buffer[i * 2] = text[i];
-    // Write color attribute (light gray on black)
+    video_buffer[i * 2] = text[i] as u8;
     video_buffer[i * 2 + 1] = 0x07;
     i += 1;
   }
 
-  // Halt the CPU
-  loop {
-    asm { "hlt" }
-  }
+  hang();
 }
