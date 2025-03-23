@@ -253,7 +253,7 @@ pub struct ParsedConst {
   pub(crate) name_span: Span,
   pub(crate) linkage: DefinitionLinkage,
   pub(crate) r#type: ParsedType,
-  pub(crate) value: Option<ParsedExpression>,
+  pub(crate) value: ParsedExpression,
 }
 
 #[derive(Debug, Clone)]
@@ -269,13 +269,6 @@ pub struct ParsedCall {
   pub(crate) name: String,
   pub(crate) type_args: Vec<ParsedType>,
   pub(crate) args: Vec<ParsedExpression>,
-}
-
-#[derive(Debug)]
-pub struct ParsedVariable {
-  pub(crate) mutable: bool,
-  pub(crate) name: String,
-  pub(crate) r#type: ParsedType,
 }
 
 #[derive(Debug, Clone)]
@@ -307,7 +300,7 @@ pub struct ParsedFunction {
   pub(crate) linkage: DefinitionLinkage,
   pub(crate) attributes: Vec<ParsedFunctionAttribute>,
   pub(crate) type_parameters: Vec<ParsedTypeArg>,
-  pub(crate) parameters: Vec<ParsedVariable>,
+  pub(crate) parameters: Vec<ParsedVarDecl>,
   pub(crate) return_type: Option<ParsedType>,
   pub(crate) body: Option<ParsedBlock>,
 }

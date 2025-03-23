@@ -21,7 +21,7 @@ pub type TypeDeclId = usize;
 #[derive(Debug)]
 pub struct Scope {
   pub(crate) namespace_name: Option<String>,
-  pub(crate) vars: Vec<CheckedVariable>,
+  pub(crate) vars: Vec<CheckedVarDecl>,
   pub(crate) functions: Vec<(String, FunctionId)>,
   pub(crate) type_decls: Vec<(String, TypeDeclId)>,
   pub(crate) types: Vec<(String, TypeId)>,
@@ -65,13 +65,6 @@ pub struct CheckedNamespace {
 }
 
 #[derive(Debug, Clone)]
-pub struct CheckedVariable {
-  pub(crate) name: String,
-  pub(crate) type_id: TypeId,
-  pub(crate) mutable: bool,
-}
-
-#[derive(Debug, Clone)]
 pub struct CheckedVarDecl {
   pub(crate) name: String,
   pub(crate) type_id: TypeId,
@@ -97,9 +90,10 @@ pub enum GenericParameter {
 #[derive(Debug, Clone)]
 pub struct CheckedFunction {
   pub(crate) name: String,
+  pub(crate) name_span: Span,
   pub(crate) visibility: Visibility,
   pub(crate) return_type_id: TypeId,
-  pub(crate) params: Vec<CheckedVariable>,
+  pub(crate) params: Vec<CheckedVarDecl>,
   pub(crate) generic_parameters: Vec<GenericParameter>,
   pub(crate) scope_id: ScopeId,
   pub(crate) block: CheckedBlock,
@@ -155,8 +149,8 @@ pub enum CheckedExpression {
   QuotedCString(String, Span),
   CharacterLiteral(char, Span),
 
-  Variable(CheckedVariable, Span),
-  NamespacedVariable(Vec<CheckedNamespace>, CheckedVariable, Span),
+  Variable(CheckedVarDecl, Span),
+  NamespacedVariable(Vec<CheckedNamespace>, CheckedVarDecl, Span),
 
   UnaryOp(Box<CheckedExpression>, CheckedUnaryOperator, TypeId, Span),
   BinaryOp(
@@ -302,7 +296,7 @@ impl CheckedType {
 pub struct CheckedMethod {
   pub(crate) name: String,
   pub(crate) return_type_id: TypeId,
-  pub(crate) params: Vec<CheckedVariable>,
+  pub(crate) params: Vec<CheckedVarDecl>,
   pub(crate) generic_parameters: Vec<GenericParameter>,
   pub(crate) scope_id: ScopeId,
   pub(crate) block: CheckedBlock,
@@ -478,7 +472,7 @@ impl Project {
     Ok(())
   }
 
-  fn find_var_in_scope(&self, scope_id: usize, name: &str) -> Option<CheckedVariable> {
+  fn find_var_in_scope(&self, scope_id: usize, name: &str) -> Option<CheckedVarDecl> {
     let mut scope_id = Some(scope_id);
 
     while let Some(current_id) = scope_id {
@@ -497,7 +491,7 @@ impl Project {
   pub fn add_var_to_scope(
     &mut self,
     scope_id: ScopeId,
-    var: CheckedVariable,
+    var: CheckedVarDecl,
     span: Span,
   ) -> Result<()> {
     let scope = &mut self.scopes[scope_id];
@@ -618,6 +612,16 @@ impl Project {
       CheckedType::TypeVariable(name, _, _) => name.clone(),
       CheckedType::RawPtr(type_id, _) => format!("{}*", self.typename_for_type_id(*type_id)),
     }
+  }
+
+  pub fn get_function_by_name(&self, name: &str) -> Option<&CheckedFunction> {
+    for function in &self.functions {
+      if function.name == name {
+        return Some(function);
+      }
+    }
+
+    None
   }
 }
 
@@ -745,6 +749,7 @@ fn typecheck_type_decl_predecl(
 
         let mut checked_function = CheckedFunction {
           name: method.name.clone(),
+          name_span: method.name_span,
           visibility: Visibility::Public,
           return_type_id: UNKNOWN_TYPE_ID,
           params: vec![],
@@ -756,18 +761,20 @@ fn typecheck_type_decl_predecl(
 
         for param in &method.parameters {
           if param.name.as_str() == "self" {
-            let checked_var = CheckedVariable {
+            let checked_var = CheckedVarDecl {
               name: param.name.clone(),
               type_id: type_decl_type_id,
               mutable: param.mutable,
+              span: param.span,
             };
             checked_function.params.push(checked_var);
           } else {
-            let type_id = typecheck_typename(&param.r#type, method_scope_id, project)?;
-            let checked_var = CheckedVariable {
+            let type_id = typecheck_typename(&param.ty, method_scope_id, project)?;
+            let checked_var = CheckedVarDecl {
               name: param.name.clone(),
               type_id,
               mutable: param.mutable,
+              span: param.span,
             };
             checked_function.params.push(checked_var);
           }
@@ -824,6 +831,7 @@ fn typecheck_type_decl_predecl(
 
         let mut checked_function = CheckedFunction {
           name: method.name.clone(),
+          name_span: method.name_span,
           visibility: Visibility::Public,
           return_type_id: UNKNOWN_TYPE_ID,
           params: vec![],
@@ -835,18 +843,20 @@ fn typecheck_type_decl_predecl(
 
         for param in &method.parameters {
           if param.name.as_str() == "self" {
-            let checked_var = CheckedVariable {
+            let checked_var = CheckedVarDecl {
               name: param.name.clone(),
               type_id: type_decl_type_id,
               mutable: param.mutable,
+              span: param.span,
             };
             checked_function.params.push(checked_var);
           } else {
-            let type_id = typecheck_typename(&param.r#type, method_scope_id, project)?;
-            let checked_var = CheckedVariable {
+            let type_id = typecheck_typename(&param.ty, method_scope_id, project)?;
+            let checked_var = CheckedVarDecl {
               name: param.name.clone(),
               type_id,
               mutable: param.mutable,
+              span: param.span,
             };
             checked_function.params.push(checked_var);
           }
@@ -929,10 +939,11 @@ fn typecheck_type_decl(
         let constructor_params = checked_fields
           .clone()
           .into_iter()
-          .map(|field| CheckedVariable {
+          .map(|field| CheckedVarDecl {
             name: field.name.clone(),
             type_id: field.type_id,
             mutable: field.mutable,
+            span: field.span,
           })
           .collect::<Vec<_>>();
 
@@ -946,6 +957,7 @@ fn typecheck_type_decl(
         let function_scope_id = project.create_scope(parent_scope_id);
         let checked_constructor = CheckedFunction {
           name: type_decl.name.clone(),
+          name_span: type_decl.name_span,
           visibility: Visibility::Public,
           return_type_id: type_decl_type_id,
           params: constructor_params,
@@ -993,6 +1005,7 @@ fn typecheck_function_predecl(
 
   let mut checked_function = CheckedFunction {
     name: function.name.clone(),
+    name_span: function.name_span,
     visibility: Visibility::Public,
     return_type_id: UNKNOWN_TYPE_ID,
     params: vec![],
@@ -1035,11 +1048,12 @@ fn typecheck_function_predecl(
   checked_function.generic_parameters = generic_params;
 
   for param in &function.parameters {
-    let param_type_id = typecheck_typename(&param.r#type, checked_function_scope_id, project)?;
-    let checked_param = CheckedVariable {
+    let param_type_id = typecheck_typename(&param.ty, checked_function_scope_id, project)?;
+    let checked_param = CheckedVarDecl {
       name: param.name.clone(),
       type_id: param_type_id,
       mutable: param.mutable,
+      span: param.span,
     };
     checked_function.params.push(checked_param);
   }
@@ -1262,10 +1276,11 @@ fn typecheck_statement(
 
       project.add_var_to_scope(
         scope_id,
-        CheckedVariable {
+        CheckedVarDecl {
           name: checked_var_decl.name.clone(),
           type_id: checked_var_decl.type_id,
           mutable: checked_var_decl.mutable,
+          span: checked_var_decl.span,
         },
         checked_var_decl.span,
       )?;
@@ -1661,14 +1676,18 @@ fn typecheck_expression(
   };
 
   match expr {
+    // ParsedExpression::Null(span) => Ok(CheckedExpression::Null(*span, type_id)),
+    ParsedExpression::Nullptr(span) => {
+      let type_id = type_hint_id.unwrap_or(UNKNOWN_TYPE_ID);
+      if type_id == UNKNOWN_TYPE_ID {
+        return Err(Error::new(*span, "unable to infer type of nullptr".into()));
+      }
+
+      Ok(CheckedExpression::Nullptr(*span, type_id))
+    }
+
     ParsedExpression::NumericConstant(constant, span) => {
-      let type_id = if type_hint_id.is_some()
-        && constant.type_id() != type_hint_id.unwrap_or(UNKNOWN_TYPE_ID)
-      {
-        type_hint_id.unwrap()
-      } else {
-        unify_with_type_hint(project, &constant.type_id())?
-      };
+      let type_id = unify_with_type_hint(project, &constant.type_id())?;
       Ok(CheckedExpression::NumericConstant(
         constant.clone(),
         type_id,

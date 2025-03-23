@@ -1,4 +1,5 @@
 use crate::compiler::FileId;
+use serde::{ser::SerializeStruct, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Span {
@@ -29,5 +30,21 @@ impl Span {
       start: self.start.min(other.start),
       end: self.end.max(other.end),
     }
+  }
+
+  pub fn contains(&self, position: usize) -> bool {
+    self.start <= position && position <= self.end
+  }
+}
+
+impl Serialize for Span {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let mut s = serializer.serialize_struct("Span", 2)?;
+    s.serialize_field("start", &self.start)?;
+    s.serialize_field("end", &self.end)?;
+    s.end()
   }
 }

@@ -4,8 +4,7 @@ use crate::{
   ast::{
     BinaryOperator, DefinitionLinkage, NumericConstant, ParsedBlock, ParsedCall, ParsedConst,
     ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
-    ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, ParsedVariable,
-    UnaryOperator,
+    ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
   },
   compiler::FileId,
   error::{Error, Result},
@@ -70,14 +69,13 @@ impl Parser {
         }
 
         TokenKind::KwConst => {
-          // TODO: native const
           self.expect(TokenKind::KwConst)?;
           let name = self.expect(TokenKind::Identifier)?;
           let name_span = name.span;
           self.expect(TokenKind::Colon)?;
           let r#type = self.parse_type()?;
           self.expect(TokenKind::Equal)?;
-          let value = Some(self.parse_expression(false)?);
+          let value = self.parse_expression(false)?;
           self.expect(TokenKind::Semicolon)?;
           namespace.constants.push(ParsedConst {
             name: name.literal.clone(),
@@ -277,7 +275,7 @@ impl Parser {
     Ok(attributes)
   }
 
-  fn parse_parameters(&mut self) -> Result<Vec<ParsedVariable>> {
+  fn parse_parameters(&mut self) -> Result<Vec<ParsedVarDecl>> {
     trace!("parse_parameters: {:?}", self.current());
     let mut parameters = vec![];
     if self.current().kind == TokenKind::OpenParen {
@@ -309,7 +307,7 @@ impl Parser {
     })
   }
 
-  fn parse_variable(&mut self) -> Result<ParsedVariable> {
+  fn parse_variable(&mut self) -> Result<ParsedVarDecl> {
     trace!("parse_variable: {:?}", self.current());
     let mutable = if self.current().kind == TokenKind::KwMut {
       self.expect(TokenKind::KwMut)?;
@@ -318,20 +316,22 @@ impl Parser {
       false
     };
     if self.current().kind == TokenKind::Identifier && self.current().literal == "self" {
-      self.expect(TokenKind::Identifier)?;
-      return Ok(ParsedVariable {
+      let id = self.expect(TokenKind::Identifier)?;
+      return Ok(ParsedVarDecl {
         mutable,
         name: "self".to_string(),
-        r#type: ParsedType::Name("Self".to_string(), self.current().span),
+        ty: ParsedType::Name("Self".to_string(), self.current().span),
+        span: id.span,
       });
     }
     let name = self.expect(TokenKind::Identifier)?;
     let _ = self.expect(TokenKind::Colon)?;
     let r#type = self.parse_type()?;
-    Ok(ParsedVariable {
+    Ok(ParsedVarDecl {
       mutable,
       name: name.literal.clone(),
-      r#type,
+      ty: r#type,
+      span: name.span,
     })
   }
 
@@ -652,6 +652,15 @@ impl Parser {
       TokenKind::Identifier if name == "false" => {
         self.pos += 1;
         ParsedExpression::Boolean(false, span)
+      }
+
+      TokenKind::Identifier if name == "nullptr" => {
+        self.pos += 1;
+        ParsedExpression::Nullptr(span)
+      }
+      TokenKind::Identifier if name == "null" => {
+        self.pos += 1;
+        ParsedExpression::Null(span)
       }
 
       TokenKind::Identifier => {

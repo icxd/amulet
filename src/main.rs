@@ -8,10 +8,11 @@ use compiler::Compiler;
 use error::display_error;
 
 pub mod ast;
+pub mod backend;
 pub mod checker;
-pub mod codegen;
 pub mod compiler;
 pub mod error;
+pub mod ide;
 pub mod parser;
 pub mod span;
 pub mod tokenizer;
@@ -27,8 +28,20 @@ pub struct Opts {
   #[arg(short = 'O', long, value_enum, default_value = OptLevel::O2)]
   opt_level: OptLevel,
 
+  #[arg(short = 'I', long)]
+  include_paths: Vec<PathBuf>,
+
   #[arg(long)]
   target: Option<String>,
+
+  #[arg(long, default_value_t = false)]
+  print_symbols: bool,
+
+  #[arg(long)]
+  hover_position: Option<usize>,
+
+  #[arg(long, default_value_t = false)]
+  no_codegen: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]

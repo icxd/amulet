@@ -4,10 +4,11 @@ use crate::{
   span::Span,
 };
 
-#[derive(Debug,Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(u8)]
 #[rustfmt::skip]
 pub enum TokenKind {
+  #[default]
   Identifier,
   Integer,
   Float,
@@ -132,7 +133,7 @@ impl std::fmt::Display for TokenKind {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Token {
   pub(crate) kind: TokenKind,
   pub(crate) span: Span,

@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use inkwell::context::Context;
 
 use crate::{
+  backend::llvm::{compile_namespace, LLVMBackend},
   checker::{typecheck_namespace, CheckedType, Project, Scope},
-  codegen::{self, CodeGen},
   error::Result,
+  ide::ide,
   parser::Parser,
   span::Span,
   tokenizer::Tokenizer,
@@ -39,8 +40,8 @@ pub type FileId = usize;
 // freestanding environment, meaning nothing in the core library
 // does any sort of heap allocation. Hence it will still be
 // included if --nostdlib is passed, unlike standard library.
-pub const CORE_LIB_PATH: &str = "runtime/core/";
-pub const STD_LIB_PATH: &str = "runtime/std/";
+pub const CORE_LIB_PATH: &str = "/Users/icxd/dev/cpp/amulet/runtime/core/";
+pub const STD_LIB_PATH: &str = "/Users/icxd/dev/cpp/amulet/runtime/std/";
 
 #[derive(Debug)]
 pub struct Compiler {
@@ -73,7 +74,7 @@ impl Compiler {
     for (name, contents) in runtime {
       self.files.push((name.clone(), contents.clone()));
 
-      let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents);
+      let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents.clone());
       let tokens = tokenizer.tokenize()?;
 
       let mut parser = Parser::new(self.files.len() - 1, tokens);
@@ -81,11 +82,21 @@ impl Compiler {
 
       typecheck_namespace(&parsed_namespace, 0, project)?;
 
+      // if self.opts.print_symbols {
+      //   let symbols = ide::get_symbols(project);
+      //   println!("{}", serde_json::to_string(&symbols).unwrap());
+      //   continue;
+      // }
+
+      if self.opts.no_codegen {
+        continue;
+      }
+
       let path = PathBuf::from(name.clone()).with_extension("ll");
       let context = Context::create();
-      let mut gen = CodeGen::new(self.opts.clone(), &path.display().to_string(), &context);
-      // codegen::compile(&mut gen, project)?;
-      // gen.module.print_to_file(path).unwrap();
+      let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
+      compile_namespace(&mut backend, project)?;
+      backend.module.print_to_file(path).unwrap();
     }
 
     Ok(())
@@ -99,7 +110,7 @@ impl Compiler {
     let contents = std::fs::read_to_string(path.clone()).expect("failed to read file.");
     self.files.push((path.clone(), contents.clone()));
 
-    let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents);
+    let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents.clone());
     let tokens = tokenizer.tokenize()?;
 
     let mut parser = Parser::new(self.files.len() - 1, tokens);
@@ -112,11 +123,34 @@ impl Compiler {
 
     typecheck_namespace(&parsed_namespace, file_scope_id, project)?;
 
+    if self.opts.print_symbols {
+      let symbols = ide::get_symbols(project);
+      println!("{}", serde_json::to_string(&symbols).unwrap());
+      return Ok(());
+    }
+
+    if self.opts.hover_position.is_some() {
+      let Some(symbol) = ide::get_symbol_at_position(project, self.opts.hover_position.unwrap())
+      else {
+        return Ok(());
+      };
+      let signature = ide::get_symbol_signature(project, &symbol);
+      println!(
+        "{{\"hover\":{}}}",
+        serde_json::to_string(&signature).unwrap()
+      );
+      return Ok(());
+    }
+
+    if self.opts.no_codegen {
+      return Ok(());
+    }
+
     let path = PathBuf::from(path.clone()).with_extension("ll");
     let context = Context::create();
-    let mut gen = CodeGen::new(self.opts.clone(), &path.display().to_string(), &context);
-    // codegen::compile(&mut gen, project)?;
-    // gen.module.print_to_file(path).unwrap();
+    let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
+    compile_namespace(&mut backend, project)?;
+    backend.module.print_to_file(path).unwrap();
 
     Ok(())
   }
