@@ -13,6 +13,7 @@ pub enum TokenKind {
   Integer,
   Float,
   String,
+  Char,
 
   KwAs,
   KwAsm,
@@ -70,6 +71,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::Integer => "integer",
         TokenKind::Float => "float",
         TokenKind::String => "string",
+        TokenKind::Char => "char",
         TokenKind::KwAs => "as",
         TokenKind::KwAsm => "asm",
         TokenKind::KwBreak => "break",
@@ -206,6 +208,29 @@ impl Tokenizer {
             span: Span::new(self.file_id, start, end),
             literal,
           });
+        }
+
+        Some('\'') => {
+          self.pos += 1;
+          let start = self.pos;
+          while self.pos < self.source.len() && self.source.chars().nth(self.pos).unwrap() != '\'' {
+            self.pos += 1;
+          }
+          let end = self.pos;
+          let length = end - start;
+          if length != 1 {
+            return Err(Error::new(
+              Span::new(self.file_id, start, end),
+              "character literal must be a single character".into(),
+            ));
+          }
+          let literal = self.source[start..end].to_string();
+          tokens.push(Token {
+            kind: TokenKind::Char,
+            span: Span::new(self.file_id, start, end),
+            literal,
+          });
+          self.pos += 1;
         }
 
         Some('0'..='9') => {
