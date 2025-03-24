@@ -11,8 +11,6 @@ use crate::{
   span::Span,
 };
 
-type Result<T> = T;
-
 pub type TypeId = usize;
 pub type ScopeId = usize;
 pub type FunctionId = usize;
@@ -420,7 +418,7 @@ impl Project {
     type_name: String,
     type_id: TypeId,
     span: Span,
-  ) -> Result<()> {
+  ) {
     let scope = &mut self.scopes[scope_id];
 
     for (existing_type, existing_type_id) in &scope.types {
@@ -459,7 +457,7 @@ impl Project {
     name: String,
     type_decl_id: TypeDeclId,
     span: Span,
-  ) -> Result<()> {
+  ) {
     let scope = &mut self.scopes[scope_id];
 
     for (type_decl_name, _) in &scope.type_decls {
@@ -491,12 +489,7 @@ impl Project {
     None
   }
 
-  pub fn add_var_to_scope(
-    &mut self,
-    scope_id: ScopeId,
-    var: CheckedVarDecl,
-    span: Span,
-  ) -> Result<()> {
+  pub fn add_var_to_scope(&mut self, scope_id: ScopeId, var: CheckedVarDecl, span: Span) {
     let scope = &mut self.scopes[scope_id];
 
     for existing_var in &scope.vars {
@@ -552,7 +545,7 @@ impl Project {
     name: String,
     function_id: FunctionId,
     span: Span,
-  ) -> Result<()> {
+  ) {
     let scope = &mut self.scopes[scope_id];
 
     for (function_name, _) in &scope.functions {
@@ -633,7 +626,7 @@ pub fn typecheck_namespace(
   parsed_namespace: &ParsedNamespace,
   scope_id: ScopeId,
   project: &mut Project,
-) -> Result<()> {
+) {
   let project_type_decl_len = project.type_decls.len();
   let project_function_len = project.functions.len();
 
@@ -690,7 +683,7 @@ fn typecheck_type_decl_predecl(
   type_decl_id: TypeDeclId,
   parent_scope_id: ScopeId,
   project: &mut Project,
-) -> Result<()> {
+) {
   let type_decl_type_id =
     project.find_or_add_type_id(CheckedType::TypeDecl(type_decl_id, type_decl.name_span));
   let type_decl_scope_id = project.create_scope(parent_scope_id);
@@ -909,7 +902,7 @@ fn typecheck_type_decl(
   type_decl_id: TypeDeclId,
   parent_scope_id: ScopeId,
   project: &mut Project,
-) -> Result<()> {
+) {
   let mut checked_fields = vec![];
 
   let checked_type_decl = &mut project.type_decls[type_decl_id];
@@ -998,7 +991,7 @@ fn typecheck_function_predecl(
   function: &ParsedFunction,
   parent_scope_id: ScopeId,
   project: &mut Project,
-) -> Result<()> {
+) {
   let scope_id = project.create_scope(parent_scope_id);
 
   let mut checked_function = CheckedFunction {
@@ -1067,11 +1060,7 @@ fn typecheck_function_predecl(
   );
 }
 
-fn typecheck_function(
-  function: &ParsedFunction,
-  parent_scope_id: ScopeId,
-  project: &mut Project,
-) -> Result<()> {
+fn typecheck_function(function: &ParsedFunction, parent_scope_id: ScopeId, project: &mut Project) {
   let function_id = project
     .find_function_in_scope(parent_scope_id, &function.name)
     .expect("internal error: missing previously defined function");
@@ -1159,11 +1148,7 @@ fn typecheck_function(
   checked_function.linkage = function_linkage;
 }
 
-fn typecheck_method(
-  function: &ParsedFunction,
-  project: &mut Project,
-  type_decl_id: TypeDeclId,
-) -> Result<()> {
+fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_id: TypeDeclId) {
   let type_decl = &mut project.type_decls[type_decl_id];
   let type_decl_scope_id = type_decl.scope_id;
   let type_decl_linkage = type_decl.linkage;
@@ -1231,11 +1216,7 @@ fn statement_definitely_returns(stmt: &CheckedStatement) -> bool {
   }
 }
 
-fn typecheck_block(
-  block: &ParsedBlock,
-  scope_id: ScopeId,
-  project: &mut Project,
-) -> Result<CheckedBlock> {
+fn typecheck_block(block: &ParsedBlock, scope_id: ScopeId, project: &mut Project) -> CheckedBlock {
   let mut checked_block = CheckedBlock::new();
   for stmt in &block.stmts {
     let checked_stmt = typecheck_statement(stmt, scope_id, project);
@@ -1253,7 +1234,7 @@ fn typecheck_statement(
   stmt: &ParsedStatement,
   scope_id: ScopeId,
   project: &mut Project,
-) -> Result<CheckedStatement> {
+) -> CheckedStatement {
   match stmt {
     ParsedStatement::VarDecl(var_decl, expr, span) => {
       let mut checked_type_id = typecheck_typename(&var_decl.ty, scope_id, project);
@@ -1351,7 +1332,7 @@ fn resolve_call<'a>(
   span: &Span,
   scope_id: ScopeId,
   project: &'a mut Project,
-) -> Result<Option<CheckedFunction>> {
+) -> Option<CheckedFunction> {
   if let Some(namespace) = call.namespace.first() {
     if let Some(type_decl_id) = project.find_type_decl_in_scope(scope_id, namespace) {
       let type_decl = &project.type_decls[type_decl_id];
@@ -1419,7 +1400,7 @@ fn typecheck_call(
   this_expr: Option<&CheckedExpression>,
   type_decl_id: Option<TypeDeclId>,
   type_hint: Option<TypeId>,
-) -> Result<CheckedCall> {
+) -> CheckedCall {
   let mut checked_args = Vec::new();
   let mut return_type_id = UNKNOWN_TYPE_ID;
   let mut linkage = DefinitionLinkage::Internal;
@@ -1625,7 +1606,7 @@ fn try_promote_constant_expr_to_type(
   checked_rhs: &mut CheckedExpression,
   span: &Span,
   project: &mut Project,
-) -> Result<()> {
+) {
   if !is_integer(lhs_type_id) {
     return;
   }
@@ -1647,8 +1628,8 @@ fn typecheck_expression(
   scope_id: ScopeId,
   type_hint_id: Option<TypeId>,
   project: &mut Project,
-) -> Result<CheckedExpression> {
-  let unify_with_type_hint = |project: &mut Project, type_id: &TypeId| -> Result<TypeId> {
+) -> CheckedExpression {
+  let unify_with_type_hint = |project: &mut Project, type_id: &TypeId| -> TypeId {
     if let Some(type_hint_id) = type_hint_id {
       if type_hint_id == UNKNOWN_TYPE_ID {
         return *type_id;
@@ -1857,7 +1838,7 @@ fn typecheck_unary_operation(
   op: CheckedUnaryOperator,
   span: Span,
   project: &mut Project,
-) -> Result<CheckedExpression> {
+) -> CheckedExpression {
   let expr_type_id = expr.type_id(project);
   let expr_type = &project.types[expr_type_id];
 
@@ -1915,7 +1896,7 @@ fn typecheck_binary_operator(
   rhs: &CheckedExpression,
   span: Span,
   project: &mut Project,
-) -> Result<TypeId> {
+) -> TypeId {
   let lhs_type_id = lhs.type_id(project);
   let rhs_type_id = rhs.type_id(project);
 
@@ -2086,7 +2067,7 @@ pub fn check_types_for_compat(
   specializations: &mut HashMap<TypeId, TypeId>,
   span: Span,
   project: &mut Project,
-) -> Result<()> {
+) {
   let lhs_type = &project.types[lhs_type_id];
 
   let optional_type_decl_id = project
@@ -2240,7 +2221,7 @@ pub fn typecheck_typename(
   unchecked_type: &ParsedType,
   scope_id: ScopeId,
   project: &mut Project,
-) -> Result<TypeId> {
+) -> TypeId {
   match unchecked_type {
     ParsedType::Name(name, span) => match name.as_str() {
       "void" => crate::compiler::VOID_TYPE_ID,
