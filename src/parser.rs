@@ -639,6 +639,11 @@ impl Parser {
         ParsedExpression::QuotedString(name, span)
       }
 
+      TokenKind::Char => {
+        self.pos += 1;
+        ParsedExpression::CharacterLiteral(name.chars().next().unwrap(), span)
+      }
+
       TokenKind::Identifier if name == "c" => {
         self.pos += 1;
         let string = self.expect(TokenKind::String)?;
