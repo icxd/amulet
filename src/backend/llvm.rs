@@ -595,7 +595,6 @@ fn compile_expression<'ctx>(
 
         BinaryOperator::NotEquals => match ty {
           BasicTypeEnum::IntType(_) => {
-            dbg!(&compiled_lhs, &compiled_rhs);
             let value = backend
               .builder
               .build_int_compare(
@@ -838,7 +837,7 @@ fn compile_expression<'ctx>(
           };
           let value = backend
             .builder
-            .build_load(compiled_expr_type, value, "tmp")
+            .build_load(compiled_type, value, "tmp")
             .expect("internal error: failed to build load");
           Ok(value)
         }

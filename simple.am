@@ -1,27 +1,15 @@
-// fn strlen(s: c_char*) -> usz {
-//   mut i = 0 as usz;
-//   while s[i] != 0 as c_char {
-//     i += 1;
-//   }
-//   return i;
-// }
+fn strlen(s: c_char*) -> usz {
+  mut i = 0 as usz;
+  while s[i] != 0 as c_char {
+    i = i + 1;
+  }
+  return i;
+}
 
 fn main(
   argc: i32,
   argv: c_char**,
 ) {
   let executable: c_char* = argv[0];
-  // let executable_len = strlen(executable);
-
-  // let i = argc;
-  // let j = i + 1;
-
-  // let k = i == j;
-  // let l = i != j;
-
-  // let args = argv as usz;
-  // let deadcode = 0xdeadc0de as i32*;
-
-  // let null_value: i32* = nullptr;
-  // return null_value as i32;
+  let executable_len = strlen(executable);
 }
