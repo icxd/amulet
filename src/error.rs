@@ -1,23 +1,65 @@
 use crate::span::Span;
+use serde::{ser::SerializeStruct, Serialize};
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Diagnostic>;
 
 #[derive(Debug, Clone)]
-pub struct ErrorHint {
+pub struct DiagnosticHint {
   pub(crate) span: Span,
   pub(crate) message: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct Error {
-  pub(crate) span: Span,
-  pub(crate) message: String,
-  pub(crate) hints: Vec<ErrorHint>,
+impl Serialize for DiagnosticHint {
+  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let mut s = serializer.serialize_struct("DiagnosticHint", 2)?;
+    s.serialize_field("span", &self.span)?;
+    s.serialize_field("message", &self.message)?;
+    s.end()
+  }
 }
 
-impl Error {
-  pub fn new(span: Span, message: String) -> Self {
+#[derive(Debug, Clone, Copy)]
+pub enum Severity {
+  Error,
+  Warning,
+}
+
+impl Serialize for Severity {
+  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    serializer.serialize_str(match self {
+      Severity::Error => "error",
+      Severity::Warning => "warning",
+    })
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+  pub(crate) severity: Severity,
+  pub(crate) span: Span,
+  pub(crate) message: String,
+  pub(crate) hints: Vec<DiagnosticHint>,
+}
+
+impl Diagnostic {
+  pub fn error(span: Span, message: String) -> Self {
     Self {
+      severity: Severity::Error,
+      span,
+      message,
+      hints: vec![],
+    }
+  }
+
+  pub fn warning(span: Span, message: String) -> Self {
+    Self {
+      severity: Severity::Warning,
       span,
       message,
       hints: vec![],
@@ -25,12 +67,26 @@ impl Error {
   }
 
   pub fn with_hint(&mut self, span: Span, message: String) -> Self {
-    self.hints.push(ErrorHint { span, message });
+    self.hints.push(DiagnosticHint { span, message });
     self.clone()
   }
 }
 
-fn display_error_hint(hint: &ErrorHint, source: &str, filepath: &str) {
+impl Serialize for Diagnostic {
+  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let mut s = serializer.serialize_struct("Diagnostic", 4)?;
+    s.serialize_field("severity", &self.severity)?;
+    s.serialize_field("span", &self.span)?;
+    s.serialize_field("message", &self.message)?;
+    s.serialize_field("hints", &self.hints)?;
+    s.end()
+  }
+}
+
+fn display_error_hint(hint: &DiagnosticHint, source: &str, filepath: &str) {
   let (mut line_n, mut col) = (1, 1);
   for i in 0..hint.span.start {
     if source.chars().nth(i).unwrap() == '\n' {
@@ -61,7 +117,7 @@ fn display_error_hint(hint: &ErrorHint, source: &str, filepath: &str) {
   );
 }
 
-pub fn display_error(err: &Error, source: &str, filepath: &str) {
+pub fn display_error(err: &Diagnostic, source: &str, filepath: &str) {
   let (mut line_n, mut col) = (1, 1);
   for i in 0..err.span.start {
     if source.chars().nth(i).unwrap() == '\n' {
@@ -75,7 +131,18 @@ pub fn display_error(err: &Error, source: &str, filepath: &str) {
   let lines = source.lines().collect::<Vec<&str>>();
   let line = lines.get(line_n - 1).unwrap();
 
-  eprintln!("\x1b[31;1merror: \x1b[0;1m{}\x1b[0m", err.message);
+  eprintln!(
+    "\x1b[{};1m{}: \x1b[0;1m{}\x1b[0m",
+    match err.severity {
+      Severity::Error => "31",
+      Severity::Warning => "33",
+    },
+    match err.severity {
+      Severity::Error => "error",
+      Severity::Warning => "warning",
+    },
+    err.message
+  );
   eprintln!(
     "\x1b[34;1m{}--> \x1b[0m{}:{}:{}",
     " ".repeat(line_n.to_string().len()),
@@ -86,8 +153,12 @@ pub fn display_error(err: &Error, source: &str, filepath: &str) {
   eprintln!("\x1b[34;1m{} |", " ".repeat(line_n.to_string().len()),);
   eprintln!("\x1b[34;1m{line_n} |\x1b[0m {line}");
   eprintln!(
-    "\x1b[34;1m{} | \x1b[31;1m{}^{}\x1b[0m",
+    "\x1b[34;1m{} | \x1b[{};1m{}^{}\x1b[0m",
     " ".repeat(line_n.to_string().len()),
+    match err.severity {
+      Severity::Error => "31",
+      Severity::Warning => "33",
+    },
     " ".repeat(col - 1),
     "~".repeat(err.span.end - err.span.start - 1)
   );

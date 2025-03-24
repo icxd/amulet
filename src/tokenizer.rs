@@ -1,6 +1,6 @@
 use crate::{
   compiler::FileId,
-  error::{Error, Result},
+  error::{Diagnostic, Result},
   span::Span,
 };
 
@@ -219,7 +219,7 @@ impl Tokenizer {
           let end = self.pos;
           let length = end - start;
           if length != 1 {
-            return Err(Error::new(
+            return Err(Diagnostic::error(
               Span::new(self.file_id, start, end),
               "character literal must be a single character".into(),
             ));
@@ -610,7 +610,7 @@ impl Tokenizer {
         }
 
         _ => {
-          return Err(Error::new(
+          return Err(Diagnostic::error(
             Span::new(self.file_id, self.pos, self.pos + 1),
             format!("unexpected character '{}'", c.unwrap()),
           ));

@@ -7,7 +7,7 @@ use crate::{
     ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
   },
   compiler::FileId,
-  error::{Error, Result},
+  error::{Diagnostic, Result},
   span::Span,
   tokenizer::{Token, TokenKind},
 };
@@ -87,7 +87,7 @@ impl Parser {
         }
 
         _ => {
-          return Err(Error::new(
+          return Err(Diagnostic::error(
             token.span,
             format!("unexpected token `{}`", token.kind),
           ))
@@ -177,7 +177,7 @@ impl Parser {
             }
 
             _ => {
-              return Err(Error::new(
+              return Err(Diagnostic::error(
                 self.current().span,
                 format!(
                   "expected class field or method but found `{}`",
@@ -499,7 +499,7 @@ impl Parser {
       let prec = op.precedence();
 
       if self.pos >= self.tokens.len() {
-        return Err(Error::new(
+        return Err(Diagnostic::error(
           self.tokens.get(self.pos - 1).unwrap().span,
           "incomplete math expression".into(),
         ));
@@ -628,7 +628,7 @@ impl Parser {
         ParsedExpression::NumericConstant(
           match name.parse::<f64>() {
             Ok(value) => NumericConstant::F64(value),
-            Err(_) => return Err(Error::new(span, "float is too big".into())),
+            Err(_) => return Err(Diagnostic::error(span, "float is too big".into())),
           },
           span,
         )
@@ -705,7 +705,7 @@ impl Parser {
         ParsedExpression::Unreachable(span)
       }
       _ => {
-        return Err(Error::new(
+        return Err(Diagnostic::error(
           span,
           format!("expected expression but found {}", self.current().kind),
         ))
@@ -785,7 +785,7 @@ impl Parser {
 
             _ => {
               self.pos += 1;
-              return Err(Error::new(
+              return Err(Diagnostic::error(
                 self.current().span,
                 "unsupported dot operation".into(),
               ));
@@ -807,11 +807,11 @@ impl Parser {
                   self.pos += 1;
                 }
                 _ => {
-                  return Err(Error::new(self.current().span, "expected ']'".to_string()));
+                  return Err(Diagnostic::error(self.current().span, "expected ']'".to_string()));
                 }
               }
             } else {
-              return Err(Error::new(
+              return Err(Diagnostic::error(
                 self.tokens.get(self.pos - 1).unwrap().span,
                 "expected ']'".to_string(),
               ));
@@ -897,7 +897,7 @@ impl Parser {
 
       TokenKind::Equal => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -905,7 +905,7 @@ impl Parser {
       }
       TokenKind::PlusEqual => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -913,7 +913,7 @@ impl Parser {
       }
       TokenKind::MinusEqual => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -924,7 +924,7 @@ impl Parser {
       }
       TokenKind::AsteriskEqual => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -935,7 +935,7 @@ impl Parser {
       }
       TokenKind::SlashEqual => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -946,7 +946,7 @@ impl Parser {
       }
       TokenKind::PercentEqual => {
         if !assignable {
-          return Err(Error::new(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
         }
 
         self.pos += 1;
@@ -957,7 +957,7 @@ impl Parser {
       }
 
       _ => {
-        return Err(Error::new(
+        return Err(Diagnostic::error(
           span,
           format!("illegal operator `{}`", self.current().kind),
         ))
@@ -1082,12 +1082,12 @@ impl Parser {
         self.pos += 1;
         return Ok(current.clone()); // Return a cloned token
       }
-      return Err(Error::new(
+      return Err(Diagnostic::error(
         current.span,
         format!("expected `{}`, found `{}`", kind, current.kind),
       ));
     }
-    Err(Error::new(
+    Err(Diagnostic::error(
       Span::default(),
       "unexpected end of input".to_string(),
     ))

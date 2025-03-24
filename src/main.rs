@@ -42,6 +42,9 @@ pub struct Opts {
 
   #[arg(long, default_value_t = false)]
   no_codegen: bool,
+
+  #[arg(long, default_value_t = false)]
+  json_errors: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -96,9 +99,21 @@ fn main() {
   let mut compiler = Compiler::new(&opts);
   for file in &opts.files {
     let path = file.to_str().unwrap().to_string();
-    if let Err(error) = compiler.compile_file(path.clone()) {
+    if let Err(errors) = compiler.compile_file(path.clone()) {
+      if opts.json_errors {
+        for error in errors {
+          println!("{}", serde_json::to_string(&error).unwrap());
+        }
+        continue;
+      }
+      if opts.print_symbols {
+        println!("[]");
+        continue;
+      }
       let source = &compiler.files[compiler.files.len() - 1].1;
-      display_error(&error, source.as_str(), path.as_str());
+      for error in errors {
+        display_error(&error, source.as_str(), path.as_str());
+      }
     };
   }
 }

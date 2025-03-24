@@ -1,5 +1,8 @@
+type A = class {};
+
 fn main() -> i32 {
   mut x = c"abc";
   x[0] = 'z';
+
   return x[0] as i32;
 }

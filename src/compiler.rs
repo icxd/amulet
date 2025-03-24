@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use inkwell::{context::Context, targets::FileType};
+use inkwell::context::Context;
 
 use crate::{
   backend::llvm::{compile_namespace, LLVMBackend},
   checker::{typecheck_namespace, CheckedType, Project, Scope},
-  error::Result,
+  error::{Diagnostic, Result},
   ide::ide,
   parser::Parser,
   span::Span,
@@ -80,7 +80,7 @@ impl Compiler {
       let mut parser = Parser::new(self.files.len() - 1, tokens);
       let parsed_namespace = parser.parse()?;
 
-      typecheck_namespace(&parsed_namespace, 0, project)?;
+      typecheck_namespace(&parsed_namespace, 0, project);
 
       // if self.opts.print_symbols {
       //   let symbols = ide::get_symbols(project);
@@ -102,26 +102,29 @@ impl Compiler {
     Ok(())
   }
 
-  pub fn compile_file(&mut self, path: String) -> Result<()> {
+  pub fn compile_file(&mut self, path: String) -> std::result::Result<(), Vec<Diagnostic>> {
     let project = &mut Project::new();
 
-    self.include_runtime(project)?;
+    self.include_runtime(project).map_err(|err| vec![err])?;
 
     let contents = std::fs::read_to_string(path.clone()).expect("failed to read file.");
     self.files.push((path.clone(), contents.clone()));
 
     let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents.clone());
-    let tokens = tokenizer.tokenize()?;
+    let tokens = tokenizer.tokenize().map_err(|err| vec![err])?;
 
     let mut parser = Parser::new(self.files.len() - 1, tokens);
-    let parsed_namespace = parser.parse()?;
+    let parsed_namespace = parser.parse().map_err(|err| vec![err])?;
 
     let scope = Scope::new(Some(0));
     project.scopes.push(scope);
 
     let file_scope_id = project.scopes.len() - 1;
 
-    typecheck_namespace(&parsed_namespace, file_scope_id, project)?;
+    typecheck_namespace(&parsed_namespace, file_scope_id, project);
+    if project.diagnostics.len() > 0 {
+      return Err(project.diagnostics.clone());
+    }
 
     if self.opts.print_symbols {
       let symbols = ide::get_symbols(project);
@@ -149,17 +152,13 @@ impl Compiler {
     let path = PathBuf::from(path.clone()).with_extension("ll");
     let context = Context::create();
     let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
-    compile_namespace(&mut backend, project)?;
+    compile_namespace(&mut backend, project).map_err(|err| vec![err])?;
+
+    backend.module.print_to_file(path.clone()).unwrap();
     if let Err(err) = backend.module.verify() {
       println!("\x1b[31;1minternal error: \x1b[0;1munable to verify LLVM module\x1b[0m");
       println!("{}", err.to_string());
     }
-
-    backend.module.print_to_file(path.clone()).unwrap();
-    backend
-      .machine
-      .write_to_file(&backend.module, FileType::Object, &path.with_extension("o"))
-      .unwrap();
 
     Ok(())
   }
