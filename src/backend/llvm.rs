@@ -2,12 +2,15 @@ use std::{cell::RefCell, collections::HashMap};
 
 use inkwell::{
   builder::Builder,
-  context::Context,
-  llvm_sys::core::{LLVMConstStruct, LLVMFunctionType, LLVMPointerType},
+  context::{AsContextRef, Context},
+  llvm_sys::core::{
+    LLVMConstNamedStruct, LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed,
+    LLVMStructSetBody,
+  },
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
   types::{AsTypeRef, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{AsValueRef, BasicValueEnum, FunctionValue, StructValue},
+  values::{AsValueRef, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, StructValue},
   FloatPredicate, IntPredicate,
 };
 
@@ -31,6 +34,7 @@ pub struct LLVMBackend<'ctx> {
 
   pub current_function: Option<FunctionValue<'ctx>>,
   pub variables: RefCell<HashMap<String, BasicTypeEnum<'ctx>>>,
+  pub functions: RefCell<HashMap<String, FunctionValue<'ctx>>>,
   pub struct_types: RefCell<HashMap<String, StructType<'ctx>>>,
 }
 
@@ -67,6 +71,7 @@ impl<'ctx> LLVMBackend<'ctx> {
       machine,
       current_function: None,
       variables: RefCell::new(HashMap::new()),
+      functions: RefCell::new(HashMap::new()),
       struct_types: RefCell::new(HashMap::new()),
     }
   }
@@ -107,7 +112,24 @@ fn compile_type_decl<'ctx>(
     let field_type = compile_type(backend, project, *type_id);
     field_types.push(field_type);
   }
-  let struct_type = backend.context.struct_type(&field_types, false);
+  let struct_type = unsafe {
+    let struct_type = LLVMStructCreateNamed(
+      backend.context.as_ctx_ref(),
+      type_decl.name.clone().as_mut_ptr() as *mut _,
+    );
+    LLVMStructSetBody(
+      struct_type,
+      field_types
+        .iter()
+        .map(|ty| ty.as_type_ref())
+        .collect::<Vec<_>>()
+        .as_mut_ptr(),
+      field_types.len() as u32,
+      false as i32,
+    );
+    StructType::new(struct_type)
+  };
+
   backend
     .struct_types
     .borrow_mut()
@@ -161,39 +183,77 @@ fn compile_function<'ctx>(
     DefinitionLinkage::Internal => {
       let fn_value = backend.module.add_function(&function.name, fn_type, None);
       backend.current_function = Some(fn_value);
+      backend
+        .functions
+        .borrow_mut()
+        .insert(function.name.clone(), fn_value);
 
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);
 
       compile_block(backend, project, function.block.clone())?;
 
+      if function.return_type_id == VOID_TYPE_ID {
+        backend.builder.build_return(None).unwrap();
+      }
+
       backend.current_function = None;
     }
     DefinitionLinkage::External => {
-      let _ = backend
+      let fn_value = backend
         .module
         .add_function(&function.name, fn_type, Some(Linkage::External));
+      backend
+        .functions
+        .borrow_mut()
+        .insert(function.name.clone(), fn_value);
     }
     DefinitionLinkage::ImplicitConstructor => {
       let fn_value = backend.module.add_function(&function.name, fn_type, None);
+      backend
+        .functions
+        .borrow_mut()
+        .insert(function.name.clone(), fn_value);
+
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);
 
       let mut fields = vec![];
-      for (idx, _) in function.params.iter().enumerate() {
-        fields.push(
-          fn_value
-            .get_nth_param(idx as u32)
-            .expect("internal error: failed to get param")
-            .as_value_ref(),
-        );
+      for (idx, param) in function.params.iter().enumerate() {
+        // let param_type = compile_type(backend, project, param.type_id);
+        // let param_value = backend
+        //   .builder
+        //   .build_alloca(param_type, param.name.as_str())
+        //   .expect("internal error: failed to create alloca");
+        // backend
+        //   .builder
+        //   .build_store(
+        //     param_value,
+        //     fn_value
+        //       .get_nth_param(idx as u32)
+        //       .expect("internal error: failed to get param"),
+        //   )
+        //   .expect("internal error: failed to build store");
+        // let value = backend
+        //   .builder
+        //   .build_load(param_type, param_value, param.name.as_str())
+        //   .expect("internal error: failed to build load");
+        // fields.push(value.as_value_ref());
+        fields.push(fn_value.get_nth_param(idx as u32).unwrap().as_value_ref());
       }
 
+      let struct_type = backend
+        .struct_types
+        .borrow()
+        .get(function.name.as_str())
+        .unwrap()
+        .clone();
+
       let value = BasicValueEnum::StructValue(unsafe {
-        StructValue::new(LLVMConstStruct(
+        StructValue::new(LLVMConstNamedStruct(
+          struct_type.as_type_ref(),
           fields.as_mut_ptr(),
-          function.params.len() as u32,
-          false as i32,
+          fields.len() as u32,
         ))
       });
 
@@ -247,10 +307,17 @@ fn compile_statement<'ctx>(
         .current_function
         .expect("internal error: no current function");
 
-      let condition = compile_expression(backend, project, condition)?;
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       let loop_basic_block = backend.context.append_basic_block(fn_value, "loop");
       let after_basic_block = backend.context.append_basic_block(fn_value, "after");
+
+      backend
+        .builder
+        .build_unconditional_branch(entry_basic_block)
+        .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(entry_basic_block);
+      let condition = compile_expression(backend, project, condition)?;
 
       backend
         .builder
@@ -745,17 +812,32 @@ fn compile_expression<'ctx>(
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
 
-        BinaryOperator::Assign => todo!("{:?}", op),
+        BinaryOperator::Assign => {
+          if let CheckedExpression::Variable(var, _) = *lhs.clone() {
+            let ty = backend.variables.borrow()[var.name.as_str()].clone();
+            let ptr = backend
+              .builder
+              .build_alloca(ty, "tmp")
+              .expect("internal error: failed to create alloca");
+            let value = backend
+              .builder
+              .build_load(ty, ptr, "tmp")
+              .expect("internal error: failed to build load");
+            backend
+              .builder
+              .build_store(ptr, compiled_rhs)
+              .expect("internal error: failed to build store");
+            Ok(value)
+          } else {
+            panic!("internal error: invalid lhs in binary operation in codegen");
+          }
+        }
 
-        BinaryOperator::AddAssign => todo!("{:?}", op),
-
-        BinaryOperator::SubtractAssign => todo!("{:?}", op),
-
-        BinaryOperator::MultiplyAssign => todo!("{:?}", op),
-
-        BinaryOperator::DivideAssign => todo!("{:?}", op),
-
-        BinaryOperator::ModuloAssign => todo!("{:?}", op),
+        BinaryOperator::AddAssign
+        | BinaryOperator::SubtractAssign
+        | BinaryOperator::MultiplyAssign
+        | BinaryOperator::DivideAssign
+        | BinaryOperator::ModuloAssign => unreachable!(),
       }
     }
 
@@ -844,6 +926,26 @@ fn compile_expression<'ctx>(
 
         _ => panic!("internal error: invalid type in indexed expression in codegen"),
       }
+    }
+
+    CheckedExpression::Call(call, _, _) => {
+      let fns = backend.functions.clone();
+      let fns = fns.borrow();
+      let callee = fns.get(&call.name).unwrap();
+
+      let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![];
+      for arg in call.args.iter() {
+        let arg = compile_expression(backend, project, arg)?;
+        args.push(arg.into());
+      }
+
+      let value = backend
+        .builder
+        .build_call(callee.clone(), args.as_slice(), "tmp")
+        .expect("internal error: failed to build call");
+
+      let value = value.try_as_basic_value();
+      Ok(value.unwrap_left())
     }
 
     _ => todo!("compile_expression not implemented for {:?}", expr),

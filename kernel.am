@@ -1,7 +1,7 @@
 fn strlen(s: c_char*) -> usz {
-  mut i: usz = 0;
+  mut i = 0 as usz;
   while s[i] != 0 as c_char {
-    i += 1;
+    i += 1 as usz;
   }
   return i;
 }
@@ -16,11 +16,11 @@ fn kmain() callconv(C) {
   mut video_buffer = 0xb8000 as u8*;
   let text = c"Hello, world!\n";
 
-  mut i: usz = 0;
+  mut i = 0 as usz;
   while i < strlen(text) {
     video_buffer[i * 2] = text[i] as u8;
     video_buffer[i * 2 + 1] = 0x07;
-    i += 1;
+    i += 1 as usz;
   }
 
   hang();

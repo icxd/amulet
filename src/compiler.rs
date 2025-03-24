@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf};
 
 use inkwell::context::Context;
 
@@ -92,11 +92,11 @@ impl Compiler {
         continue;
       }
 
-      let path = PathBuf::from(name.clone()).with_extension("ll");
-      let context = Context::create();
-      let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
-      compile_namespace(&mut backend, project)?;
-      backend.module.print_to_file(path).unwrap();
+      // let path = PathBuf::from(name.clone()).with_extension("ll");
+      // let context = Context::create();
+      // let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
+      // compile_namespace(&mut backend, project)?;
+      // backend.module.print_to_file(path).unwrap();
     }
 
     Ok(())
@@ -150,7 +150,13 @@ impl Compiler {
     let context = Context::create();
     let mut backend = LLVMBackend::new(self.opts.clone(), &path.display().to_string(), &context);
     compile_namespace(&mut backend, project)?;
-    backend.module.print_to_file(path).unwrap();
+    if let Err(err) = backend.module.verify() {
+      println!("\x1b[31;1minternal error: \x1b[0;1munable to verify LLVM module\x1b[0m");
+      println!("{}", err.to_string());
+    }
+    backend.module.print_to_file(path.clone()).unwrap();
+
+    let path = path.clone().with_extension("s");
 
     Ok(())
   }
