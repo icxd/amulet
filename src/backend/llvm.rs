@@ -10,8 +10,11 @@ use inkwell::{
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
   types::{AsTypeRef, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{AsValueRef, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, StructValue},
-  FloatPredicate, IntPredicate,
+  values::{
+    AsValueRef, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
+    PointerValue, StructValue,
+  },
+  AddressSpace, FloatPredicate, IntPredicate,
 };
 
 use crate::{
@@ -34,6 +37,7 @@ pub struct LLVMBackend<'ctx> {
 
   pub current_function: Option<FunctionValue<'ctx>>,
   pub variables: RefCell<HashMap<String, BasicTypeEnum<'ctx>>>,
+  pub variable_ptrs: RefCell<HashMap<String, PointerValue<'ctx>>>,
   pub functions: RefCell<HashMap<String, FunctionValue<'ctx>>>,
   pub struct_types: RefCell<HashMap<String, StructType<'ctx>>>,
 }
@@ -71,6 +75,7 @@ impl<'ctx> LLVMBackend<'ctx> {
       machine,
       current_function: None,
       variables: RefCell::new(HashMap::new()),
+      variable_ptrs: RefCell::new(HashMap::new()),
       functions: RefCell::new(HashMap::new()),
       struct_types: RefCell::new(HashMap::new()),
     }
@@ -218,36 +223,27 @@ fn compile_function<'ctx>(
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);
 
-      let mut fields = vec![];
-      for (idx, param) in function.params.iter().enumerate() {
-        // let param_type = compile_type(backend, project, param.type_id);
-        // let param_value = backend
-        //   .builder
-        //   .build_alloca(param_type, param.name.as_str())
-        //   .expect("internal error: failed to create alloca");
-        // backend
-        //   .builder
-        //   .build_store(
-        //     param_value,
-        //     fn_value
-        //       .get_nth_param(idx as u32)
-        //       .expect("internal error: failed to get param"),
-        //   )
-        //   .expect("internal error: failed to build store");
-        // let value = backend
-        //   .builder
-        //   .build_load(param_type, param_value, param.name.as_str())
-        //   .expect("internal error: failed to build load");
-        // fields.push(value.as_value_ref());
-        fields.push(fn_value.get_nth_param(idx as u32).unwrap().as_value_ref());
-      }
-
       let struct_type = backend
         .struct_types
         .borrow()
         .get(function.name.as_str())
         .unwrap()
         .clone();
+
+      // let heap_struct = backend
+      //   .builder
+      //   .build_alloca(struct_type, "structure")
+      //   .expect("internal error: failed to build alloca");
+
+      let mut fields = vec![];
+      for (idx, _) in function.params.iter().enumerate() {
+        fields.push(
+          fn_value
+            .get_nth_param(idx as u32)
+            .expect("internal error: failed to get param")
+            .as_value_ref(),
+        );
+      }
 
       let value = BasicValueEnum::StructValue(unsafe {
         StructValue::new(LLVMConstNamedStruct(
@@ -300,6 +296,10 @@ fn compile_statement<'ctx>(
         .variables
         .borrow_mut()
         .insert(var_decl.name.clone(), compiled_type);
+      backend
+        .variable_ptrs
+        .borrow_mut()
+        .insert(var_decl.name.clone(), alloca);
     }
 
     CheckedStatement::While { condition, block } => {
@@ -330,6 +330,30 @@ fn compile_statement<'ctx>(
 
       backend.builder.position_at_end(loop_basic_block);
 
+      compile_block(backend, project, block.clone())?;
+
+      backend
+        .builder
+        .build_unconditional_branch(entry_basic_block)
+        .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(after_basic_block);
+    }
+
+    CheckedStatement::Loop(block) => {
+      let fn_value = backend
+        .current_function
+        .expect("internal error: no current function");
+
+      let entry_basic_block = backend.context.append_basic_block(fn_value, "loop");
+      let after_basic_block = backend.context.append_basic_block(fn_value, "after_loop");
+
+      backend
+        .builder
+        .build_unconditional_branch(entry_basic_block)
+        .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(entry_basic_block);
       compile_block(backend, project, block.clone())?;
 
       backend
@@ -475,12 +499,37 @@ fn compile_expression<'ctx>(
       }
     }
 
-    CheckedExpression::Variable(var, _) => {
-      let ty = backend.variables.borrow()[var.name.as_str()].clone();
+    CheckedExpression::CharacterLiteral(c, _) => {
+      // TODO: this is probably wrong
+      let value = i8::try_from(*c as i8).unwrap();
+      Ok(BasicValueEnum::IntValue(
+        backend.context.i8_type().const_int(value as u64, false),
+      ))
+    }
+
+    CheckedExpression::QuotedCString(s, _) => {
+      let string_value: GlobalValue<'ctx> = unsafe {
+        backend
+          .builder
+          .build_global_string(s.as_str(), "s")
+          .expect("internal error: failed to build global string")
+      };
+
       let ptr = backend
         .builder
-        .build_alloca(ty, "tmp")
-        .expect("internal error: failed to create alloca");
+        .build_bit_cast(
+          string_value,
+          backend.context.ptr_type(AddressSpace::default()),
+          "ptr",
+        )
+        .expect("internal error: failed to build bitcast");
+
+      Ok(BasicValueEnum::PointerValue(ptr.into_pointer_value()))
+    }
+
+    CheckedExpression::Variable(var, _) => {
+      let ty = backend.variables.borrow()[var.name.as_str()].clone();
+      let ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
       let value = backend
         .builder
         .build_load(ty, ptr, "tmp")
@@ -489,6 +538,53 @@ fn compile_expression<'ctx>(
     }
 
     CheckedExpression::BinaryOp(lhs, op, rhs, _, _) => {
+      if matches!(op, BinaryOperator::Assign) {
+        if let CheckedExpression::Variable(var, _) = *lhs.clone() {
+          let type_id = lhs.type_id(project);
+          let ty = compile_type(backend, project, type_id);
+          let rhs = compile_expression(backend, project, rhs)?;
+          let var_ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
+          backend
+            .builder
+            .build_store(var_ptr, rhs)
+            .expect("internal error: failed to build store");
+          backend.variables.borrow_mut().insert(var.name.clone(), ty);
+          backend
+            .variable_ptrs
+            .borrow_mut()
+            .insert(var.name.clone(), var_ptr);
+          return Ok(rhs);
+        } else {
+          let lhs_type_id = lhs.type_id(project);
+          let lhs_type = compile_type(backend, project, lhs_type_id);
+
+          let lhs = compile_expression(backend, project, lhs)?;
+
+          let lhs_ptr = backend
+            .builder
+            .build_alloca(lhs_type, "tmp")
+            .expect("internal error: failed to build alloca");
+          backend
+            .builder
+            .build_store(lhs_ptr, lhs)
+            .expect("internal error: failed to build store");
+
+          let rhs = compile_expression(backend, project, rhs)?;
+
+          let ty = compile_type(backend, project, lhs_type_id);
+          let value = unsafe {
+            backend
+              .builder
+              .build_gep(ty, lhs_ptr, &[rhs.into_int_value()], "tmp")
+              .expect("internal error: failed to build gep")
+          };
+
+          backend.builder.build_store(lhs_ptr, value).unwrap();
+
+          return Ok(BasicValueEnum::PointerValue(value));
+        }
+      }
+
       let compiled_lhs = compile_expression(backend, project, lhs)?;
       let compiled_rhs = compile_expression(backend, project, rhs)?;
 
@@ -812,26 +908,7 @@ fn compile_expression<'ctx>(
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
 
-        BinaryOperator::Assign => {
-          if let CheckedExpression::Variable(var, _) = *lhs.clone() {
-            let ty = backend.variables.borrow()[var.name.as_str()].clone();
-            let ptr = backend
-              .builder
-              .build_alloca(ty, "tmp")
-              .expect("internal error: failed to create alloca");
-            let value = backend
-              .builder
-              .build_load(ty, ptr, "tmp")
-              .expect("internal error: failed to build load");
-            backend
-              .builder
-              .build_store(ptr, compiled_rhs)
-              .expect("internal error: failed to build store");
-            Ok(value)
-          } else {
-            panic!("internal error: invalid lhs in binary operation in codegen");
-          }
-        }
+        BinaryOperator::Assign => unreachable!(),
 
         BinaryOperator::AddAssign
         | BinaryOperator::SubtractAssign
