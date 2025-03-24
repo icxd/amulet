@@ -930,7 +930,11 @@ fn compile_expression<'ctx>(
 
           match (compiled_type, ty) {
             (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
-              Ok(BasicValueEnum::IntValue(compiled_expr.into_int_value()))
+              let value = backend
+                .builder
+                .build_int_cast(compiled_expr.into_int_value(), ty.into_int_type(), "tmp")
+                .expect("internal error: failed to build int cast");
+              Ok(BasicValueEnum::IntValue(value))
             }
 
             (BasicTypeEnum::FloatType(_), BasicTypeEnum::FloatType(_)) => {
