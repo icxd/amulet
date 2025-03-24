@@ -178,7 +178,7 @@ impl CheckedExpression {
       CheckedExpression::QuotedCString(_, _) => {
         project.find_or_add_type_id(CheckedType::RawPtr(CCHAR_TYPE_ID, Span::default()))
       }
-      CheckedExpression::CharacterLiteral(_, _) => U8_TYPE_ID,
+      CheckedExpression::CharacterLiteral(_, _) => CCHAR_TYPE_ID,
       CheckedExpression::Variable(var, _) => var.type_id,
       CheckedExpression::NamespacedVariable(_, var, _) => var.type_id,
       CheckedExpression::UnaryOp(_, _, type_id, _) => *type_id,
@@ -1699,6 +1699,10 @@ fn typecheck_expression(
 
     ParsedExpression::QuotedCString(s, span) => {
       Ok(CheckedExpression::QuotedCString(s.clone(), *span))
+    }
+
+    ParsedExpression::CharacterLiteral(c, span) => {
+      Ok(CheckedExpression::CharacterLiteral(*c, *span))
     }
 
     ParsedExpression::Var(name, span) => {
