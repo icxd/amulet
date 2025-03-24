@@ -1757,8 +1757,37 @@ fn typecheck_expression(
 
     ParsedExpression::BinaryOp(lhs, op, rhs, span) => {
       let checked_lhs = typecheck_expression(lhs, scope_id, None, project)?;
-
       let mut checked_rhs = typecheck_expression(rhs, scope_id, None, project)?;
+
+      let mut op = op.clone();
+
+      match op {
+        BinaryOperator::AddAssign
+        | BinaryOperator::SubtractAssign
+        | BinaryOperator::MultiplyAssign
+        | BinaryOperator::DivideAssign
+        | BinaryOperator::ModuloAssign => {
+          op = match op {
+            BinaryOperator::AddAssign => BinaryOperator::Add,
+            BinaryOperator::SubtractAssign => BinaryOperator::Subtract,
+            BinaryOperator::MultiplyAssign => BinaryOperator::Multiply,
+            BinaryOperator::DivideAssign => BinaryOperator::Divide,
+            BinaryOperator::ModuloAssign => BinaryOperator::Modulo,
+            _ => unreachable!(),
+          };
+          let new_rhs = CheckedExpression::BinaryOp(
+            Box::new(checked_lhs.clone()),
+            op.clone(),
+            Box::new(checked_rhs.clone()),
+            checked_lhs.type_id(project),
+            *span,
+          );
+          checked_rhs = new_rhs;
+        }
+
+        _ => {}
+      };
+
       try_promote_constant_expr_to_type(checked_lhs.type_id(project), &mut checked_rhs, span)?;
 
       let type_id =
@@ -1873,7 +1902,7 @@ fn typecheck_binary_operator(
       if lhs_type_id != rhs_type_id {
         return Err(Error::new(
           span,
-          format!("binary operation between incompatible types ({} and {})", 
+          format!("binary operation between incompatible types ({} and {})",
             project.typename_for_type_id(lhs_type_id),
             project.typename_for_type_id(rhs_type_id),
           )
@@ -1938,7 +1967,7 @@ fn typecheck_binary_operator(
       if lhs_type_id != rhs_type_id {
         return Err(Error::new(
           span,
-          format!("binary operation between incompatible types ({} and {})", 
+          format!("binary operation between incompatible types ({} and {})",
             project.typename_for_type_id(lhs_type_id),
             project.typename_for_type_id(rhs_type_id),
           ),
