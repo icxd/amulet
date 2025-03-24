@@ -645,9 +645,9 @@ impl Parser {
       }
 
       TokenKind::Identifier if name == "c" => {
-        self.pos += 1;
+        let c = self.expect(TokenKind::Identifier)?;
         let string = self.expect(TokenKind::String)?;
-        ParsedExpression::QuotedCString(string.literal, string.span)
+        ParsedExpression::QuotedCString(string.literal, c.span.join(&string.span))
       }
 
       TokenKind::Identifier if name == "true" => {

@@ -298,7 +298,7 @@ impl Tokenizer {
           let literal = self.source[start..end].to_string();
           tokens.push(Token {
             kind: TokenKind::String,
-            span: Span::new(self.file_id, start, end),
+            span: Span::new(self.file_id, start - 1, end + 1),
             literal,
           });
           self.pos += 1;
