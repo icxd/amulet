@@ -1767,22 +1767,22 @@ fn typecheck_expression(
         | BinaryOperator::MultiplyAssign
         | BinaryOperator::DivideAssign
         | BinaryOperator::ModuloAssign => {
-          op = match op {
-            BinaryOperator::AddAssign => BinaryOperator::Add,
-            BinaryOperator::SubtractAssign => BinaryOperator::Subtract,
-            BinaryOperator::MultiplyAssign => BinaryOperator::Multiply,
-            BinaryOperator::DivideAssign => BinaryOperator::Divide,
-            BinaryOperator::ModuloAssign => BinaryOperator::Modulo,
-            _ => unreachable!(),
-          };
           let new_rhs = CheckedExpression::BinaryOp(
             Box::new(checked_lhs.clone()),
-            op.clone(),
+            match op {
+              BinaryOperator::AddAssign => BinaryOperator::Add,
+              BinaryOperator::SubtractAssign => BinaryOperator::Subtract,
+              BinaryOperator::MultiplyAssign => BinaryOperator::Multiply,
+              BinaryOperator::DivideAssign => BinaryOperator::Divide,
+              BinaryOperator::ModuloAssign => BinaryOperator::Modulo,
+              _ => unreachable!(),
+            },
             Box::new(checked_rhs.clone()),
             checked_lhs.type_id(project),
             *span,
           );
           checked_rhs = new_rhs;
+          op = BinaryOperator::Assign;
         }
 
         _ => {}
