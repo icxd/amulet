@@ -12,7 +12,7 @@ type Token = class {
 fn tokenize(source: string) -> Array<Token> {
   mut tokens = Array<Token>();
   mut pos = 0;
-  while (pos < source.size) {
+  while pos < source.size {
     let ch = source.at(pos);
     pos += 1;
   }

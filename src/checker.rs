@@ -1506,7 +1506,7 @@ fn typecheck_call(
     } else {
       let mut idx = 0;
       while idx < call.args.len() {
-        let checked_arg = typecheck_expression(&call.args[idx], caller_scope_id, None, project);
+        let mut checked_arg = typecheck_expression(&call.args[idx], caller_scope_id, None, project);
 
         let callee = resolve_call(
           call,
@@ -1516,6 +1516,9 @@ fn typecheck_call(
           project,
         )
         .expect("internal error: previously resolved call is now unresolved");
+
+        let lhs_type_id = callee.params[idx + arg_offset].type_id;
+        try_promote_constant_expr_to_type(lhs_type_id, &mut checked_arg, span, project);
 
         let lhs_type_id = callee.params[idx + arg_offset].type_id;
         let rhs_type_id = checked_arg.type_id(project);
