@@ -10,10 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  install-llvm:
-    runs-on: ubuntu-latest
-    
-    
   build:
 
     runs-on: ubuntu-latest
