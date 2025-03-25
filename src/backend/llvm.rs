@@ -224,6 +224,22 @@ fn compile_function<'ctx>(
         .borrow_mut()
         .insert(function.name.clone(), fn_value);
 
+      for (idx, param) in function.params.iter().enumerate() {
+        let param_type = compile_type(backend, project, param_type_ids[idx]);
+        let ptr = backend
+          .builder
+          .build_alloca(param_type, param.name.as_str())
+          .expect("internal error: failed to allocate param");
+        backend
+          .builder
+          .build_store(ptr, fn_value.get_nth_param(idx as u32).unwrap())
+          .expect("internal error: failed to store param");
+        backend
+          .variable_ptrs
+          .borrow_mut()
+          .insert(param.name.to_string(), ptr);
+      }
+
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);
 
@@ -413,6 +429,25 @@ fn compile_statement<'ctx>(
         .builder
         .build_return(Some(&value))
         .expect("internal error: failed to build return");
+    }
+
+    CheckedStatement::InlineAsm(lines, _) => {
+      let asm_fn = backend.context.void_type().fn_type(&[], false);
+      for line in lines.iter() {
+        let asm = backend.context.create_inline_asm(
+          asm_fn,
+          line.to_string(),
+          "".into(),
+          false,
+          false,
+          None,
+          false,
+        );
+        backend
+          .builder
+          .build_indirect_call(asm_fn, asm, &[], "tmp")
+          .unwrap();
+      }
     }
 
     CheckedStatement::Expression(expr) => {
@@ -1073,6 +1108,7 @@ fn compile_expression<'ctx>(
         .expect("internal error: failed to build call");
 
       let value = value.try_as_basic_value();
+      if value.is_right() {}
       Ok(value.unwrap_left())
     }
 
