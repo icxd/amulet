@@ -10,11 +10,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  install-llvm:
+    runs-on: ubuntu-latest
+    
+    
   build:
 
     runs-on: ubuntu-latest
 
     steps:
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@v2.0.6
+      with:
+        version: "20.1.1"
+        arch: x64
+        cached: true
+            
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
