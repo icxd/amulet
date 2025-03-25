@@ -160,7 +160,7 @@ pub enum CheckedExpression {
   ),
 
   IndexedExpression(Box<CheckedExpression>, Box<CheckedExpression>, TypeId, Span),
-  FieldAccess(Box<CheckedExpression>, String, TypeId, Span),
+  IndexedStruct(Box<CheckedExpression>, String, TypeDeclId, TypeId, Span),
 
   Call(CheckedCall, TypeId, Span),
   MethodCall(Box<CheckedExpression>, CheckedCall, TypeId, Span),
@@ -183,7 +183,7 @@ impl CheckedExpression {
       CheckedExpression::UnaryOp(_, _, type_id, _) => *type_id,
       CheckedExpression::BinaryOp(_, _, right, _, _) => right.type_id(project),
       CheckedExpression::IndexedExpression(_, _, type_id, _) => *type_id,
-      CheckedExpression::FieldAccess(_, _, type_id, _) => *type_id,
+      CheckedExpression::IndexedStruct(_, _, _, type_id, _) => *type_id,
       CheckedExpression::Call(_, type_id, _) => *type_id,
       CheckedExpression::MethodCall(_, _, type_id, _) => *type_id,
       CheckedExpression::Garbage(_) => UNKNOWN_TYPE_ID,
@@ -194,7 +194,7 @@ impl CheckedExpression {
     match self {
       CheckedExpression::Variable(var, _) => var.mutable,
       CheckedExpression::IndexedExpression(expr, _, _, _) => expr.is_mutable(),
-      CheckedExpression::FieldAccess(expr, _, _, _) => expr.is_mutable(),
+      CheckedExpression::IndexedStruct(expr, _, _, _, _) => expr.is_mutable(),
       _ => false,
     }
   }
@@ -1830,6 +1830,54 @@ fn typecheck_expression(
           CheckedExpression::Garbage(*span)
         }
       }
+    }
+
+    ParsedExpression::IndexedStruct(expr, name, span) => {
+      let checked_expr = typecheck_expression(expr, scope_id, None, project);
+
+      let type_id = UNKNOWN_TYPE_ID;
+
+      let checked_expr_type_id = checked_expr.type_id(project);
+      let checked_expr_type = &project.types[checked_expr_type_id];
+      match checked_expr_type {
+        /* Type::GenericInstance(struct_id, _) |  */
+        CheckedType::TypeDecl(type_decl_id, _) => {
+          let type_decl = &project.type_decls[*type_decl_id];
+          let CheckedTypeKind::Class(class) = &type_decl.kind else {
+            project.add_diagnostic(Diagnostic::error(
+              *span,
+              format!("cannot index struct {}", type_decl.name),
+            ));
+            return CheckedExpression::Garbage(*span);
+          };
+
+          for member in &class.fields {
+            if &member.name == name {
+              return CheckedExpression::IndexedStruct(
+                Box::new(checked_expr),
+                name.to_string(),
+                *type_decl_id,
+                member.type_id,
+                *span,
+              );
+            }
+          }
+
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("unknown member of struct: {}.{}", type_decl.name, name),
+          ));
+        }
+
+        _ => {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            "member access of non-struct value".to_string(),
+          ));
+        }
+      }
+
+      CheckedExpression::Garbage(*span)
     }
 
     _ => todo!("typecheck_expression: {:?}", expr),

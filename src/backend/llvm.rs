@@ -1,19 +1,14 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
 use inkwell::{
   builder::Builder,
   context::{AsContextRef, Context},
-  llvm_sys::core::{
-    LLVMConstNamedStruct, LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed,
-    LLVMStructSetBody,
-  },
+  debug_info::{DICompileUnit, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder},
+  llvm_sys::core::{LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed, LLVMStructSetBody},
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
   types::{AsTypeRef, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{
-    AsValueRef, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
-    PointerValue, StructValue,
-  },
+  values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
   AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -30,25 +25,29 @@ use crate::{
 
 #[derive(Debug)]
 pub struct LLVMBackend<'ctx> {
+  pub path: &'ctx PathBuf,
   pub context: &'ctx Context,
   pub module: Module<'ctx>,
   pub builder: Builder<'ctx>,
   pub machine: TargetMachine,
+  pub debug_info_builder: DebugInfoBuilder<'ctx>,
+  pub compile_unit: DICompileUnit<'ctx>,
 
   pub current_function: Option<FunctionValue<'ctx>>,
   pub variables: RefCell<HashMap<String, BasicTypeEnum<'ctx>>>,
   pub variable_ptrs: RefCell<HashMap<String, PointerValue<'ctx>>>,
   pub functions: RefCell<HashMap<String, FunctionValue<'ctx>>>,
   pub struct_types: RefCell<HashMap<String, StructType<'ctx>>>,
+  pub struct_fields: RefCell<HashMap<String, Vec<String>>>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
-  pub fn new(opts: Opts, path: &String, context: &'ctx Context) -> Self {
+  pub fn new(opts: Opts, path: &'ctx PathBuf, context: &'ctx Context) -> Self {
     let target_config = InitializationConfig::default();
     Target::initialize_native(&target_config).expect("Failed to initialize native machine target!");
     Target::initialize_all(&target_config);
 
-    let module = context.create_module(path.as_str());
+    let module = context.create_module(&path.display().to_string());
     let builder = context.create_builder();
 
     let triple = match opts.target.as_ref() {
@@ -68,16 +67,38 @@ impl<'ctx> LLVMBackend<'ctx> {
       )
       .unwrap();
 
+    let (debug_info_builder, compile_unit) = module.create_debug_info_builder(
+      false,
+      DWARFSourceLanguage::C,
+      &path.clone().display().to_string(),
+      &path.clone().parent().unwrap().display().to_string(),
+      "amulet",
+      false,
+      "",
+      1,
+      "",
+      DWARFEmissionKind::Full,
+      0,
+      false,
+      true,
+      "/",
+      "",
+    );
+
     Self {
+      path,
       context,
       module,
       builder,
       machine,
+      debug_info_builder,
+      compile_unit,
       current_function: None,
       variables: RefCell::new(HashMap::new()),
       variable_ptrs: RefCell::new(HashMap::new()),
       functions: RefCell::new(HashMap::new()),
       struct_types: RefCell::new(HashMap::new()),
+      struct_fields: RefCell::new(HashMap::new()),
     }
   }
 }
@@ -135,10 +156,20 @@ fn compile_type_decl<'ctx>(
     StructType::new(struct_type)
   };
 
+  let field_names = class
+    .fields
+    .iter()
+    .map(|field| field.name.clone())
+    .collect::<Vec<_>>();
+
   backend
     .struct_types
     .borrow_mut()
     .insert(type_decl.name.clone(), struct_type);
+  backend
+    .struct_fields
+    .borrow_mut()
+    .insert(type_decl.name.clone(), field_names);
 
   Ok(())
 }
@@ -230,32 +261,44 @@ fn compile_function<'ctx>(
         .unwrap()
         .clone();
 
-      // let heap_struct = backend
-      //   .builder
-      //   .build_alloca(struct_type, "structure")
-      //   .expect("internal error: failed to build alloca");
+      let heap_struct = backend
+        .builder
+        .build_alloca(struct_type, "structure")
+        .expect("internal error: failed to build alloca");
+      let struct_value = backend
+        .builder
+        .build_load(struct_type, heap_struct, "structure")
+        .expect("internal error: failed to build load")
+        .into_struct_value();
 
-      let mut fields = vec![];
-      for (idx, _) in function.params.iter().enumerate() {
-        fields.push(
-          fn_value
-            .get_nth_param(idx as u32)
-            .expect("internal error: failed to get param")
-            .as_value_ref(),
-        );
+      for (idx, param) in function.params.iter().enumerate() {
+        let param_type = compile_type(backend, project, param.type_id);
+        let ptr = backend
+          .builder
+          .build_alloca(param_type, param.name.as_str())
+          .expect("internal error: failed to build alloca");
+        backend
+          .builder
+          .build_store(
+            ptr,
+            fn_value
+              .get_nth_param(idx as u32)
+              .expect("internal error: failed to get nth param"),
+          )
+          .expect("internal error: failed to build store");
+        let value = backend
+          .builder
+          .build_load(param_type, ptr, param.name.as_str())
+          .expect("internal error: failed to build load");
+        backend
+          .builder
+          .build_insert_value(struct_value, value, idx as u32, param.name.as_str())
+          .expect("internal error: failed to build insert value");
       }
-
-      let value = BasicValueEnum::StructValue(unsafe {
-        StructValue::new(LLVMConstNamedStruct(
-          struct_type.as_type_ref(),
-          fields.as_mut_ptr(),
-          fields.len() as u32,
-        ))
-      });
 
       backend
         .builder
-        .build_return(Some(&value))
+        .build_return(Some(&struct_value))
         .expect("internal error: failed to build return");
     }
   }
@@ -498,6 +541,10 @@ fn compile_expression<'ctx>(
         }
       }
     }
+
+    CheckedExpression::Boolean(value, _) => Ok(BasicValueEnum::IntValue(
+      backend.context.bool_type().const_int(*value as u64, false),
+    )),
 
     CheckedExpression::CharacterLiteral(c, _) => {
       // TODO: this is probably wrong
@@ -1027,6 +1074,36 @@ fn compile_expression<'ctx>(
 
       let value = value.try_as_basic_value();
       Ok(value.unwrap_left())
+    }
+
+    CheckedExpression::IndexedStruct(expr, name, type_decl_id, _, _) => {
+      let compiled_expr = compile_expression(backend, project, expr)?;
+
+      let type_decl = &project.type_decls[*type_decl_id];
+      let field_names = backend
+        .struct_fields
+        .borrow()
+        .get(type_decl.name.as_str())
+        .unwrap()
+        .clone();
+
+      let mut idx = 0;
+      while idx < field_names.len() {
+        if &field_names[idx] == name {
+          break;
+        }
+        idx += 1;
+      }
+
+      if idx >= field_names.len() {
+        panic!("internal error: field not found in struct");
+      }
+
+      let value = backend
+        .builder
+        .build_extract_value(compiled_expr.into_struct_value(), idx as u32, "tmp")
+        .unwrap();
+      Ok(value)
     }
 
     _ => todo!("compile_expression not implemented for {:?}", expr),

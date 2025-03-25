@@ -1,4 +1,5 @@
-
 fn main() -> i32 {
-  return 0 as i32;
+  let a = Optional(42, true);
+  let value = a.value;
+  return value;
 }
