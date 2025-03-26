@@ -152,7 +152,7 @@ impl Compiler {
     let path = PathBuf::from(path.clone()).with_extension("ll");
     let context = Context::create();
     let mut backend = LLVMBackend::new(self.opts.clone(), &path, &context);
-    compile_namespace(&mut backend, project).map_err(|err| vec![err])?;
+    compile_namespace(&mut backend, project);
     backend.debug_info_builder.finalize();
 
     backend.module.print_to_file(path.clone()).unwrap();

@@ -85,6 +85,20 @@ pub enum GenericParameter {
   Parameter(TypeId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallingConvention {
+  C,
+  FastCall,
+  ColdCall,
+  Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedFunctionAttribute {
+  CallConv(CallingConvention),
+  NoReturn,
+}
+
 #[derive(Debug, Clone)]
 pub struct CheckedFunction {
   pub(crate) name: String,
@@ -96,6 +110,7 @@ pub struct CheckedFunction {
   pub(crate) scope_id: ScopeId,
   pub(crate) block: CheckedBlock,
   pub(crate) linkage: DefinitionLinkage,
+  pub(crate) attributes: Vec<CheckedFunctionAttribute>,
 }
 impl CheckedFunction {
   pub fn is_static(&self) -> bool {
@@ -752,6 +767,7 @@ fn typecheck_type_decl_predecl(
           scope_id: method_scope_id,
           block: CheckedBlock::new(),
           linkage: method.linkage,
+          attributes: vec![],
         };
 
         for param in &method.parameters {
@@ -834,6 +850,7 @@ fn typecheck_type_decl_predecl(
           scope_id: method_scope_id,
           block: CheckedBlock::new(),
           linkage: method.linkage,
+          attributes: vec![],
         };
 
         for param in &method.parameters {
@@ -958,6 +975,7 @@ fn typecheck_type_decl(
           scope_id: function_scope_id,
           block: CheckedBlock::new(),
           linkage: DefinitionLinkage::ImplicitConstructor,
+          attributes: vec![],
         };
 
         project.functions.push(checked_constructor);
@@ -1004,6 +1022,7 @@ fn typecheck_function_predecl(
     scope_id,
     block: CheckedBlock::new(),
     linkage: function.linkage,
+    attributes: vec![],
   };
 
   let checked_function_scope_id = checked_function.scope_id;
@@ -1084,7 +1103,7 @@ fn typecheck_function(function: &ParsedFunction, parent_scope_id: ScopeId, proje
     VOID_TYPE_ID
   };
 
-  let checked_function = &mut project.functions[function_id];
+  let checked_function = &mut project.functions[function_id].clone();
   checked_function.return_type_id = function_return_type_id;
 
   let block = if let Some(block) = &function.body {
@@ -1119,33 +1138,29 @@ fn typecheck_function(function: &ParsedFunction, parent_scope_id: ScopeId, proje
     ));
   }
 
-  if function_linkage != DefinitionLinkage::External && !block.definitely_returns {
-    // Check if the last statement is an infinite loop
-    let mut is_infinite_loop = false;
-    if let Some(CheckedStatement::Loop(block)) = block.stmts.last() {
-      for stmt in &block.stmts {
-        let (CheckedStatement::Break(_) | CheckedStatement::Continue(_)) = stmt else {
-          is_infinite_loop = true;
-          break;
+  let mut checked_attributes = vec![];
+  for attribute in function.attributes.iter() {
+    match attribute {
+      ParsedFunctionAttribute::CallConv(call_conv, span) => {
+        let cc = match call_conv.to_lowercase().as_str() {
+          "c" => CallingConvention::C,
+          "fastcall" => CallingConvention::FastCall,
+          "coldcall" => CallingConvention::ColdCall,
+          _ => CallingConvention::Invalid,
         };
+        checked_attributes.push(CheckedFunctionAttribute::CallConv(cc));
       }
-    }
-
-    if is_infinite_loop
-      && !function
-        .attributes
-        .contains(&ParsedFunctionAttribute::NoReturn)
-    {
-      project.add_diagnostic(Diagnostic::error(
-        function.name_span,
-        "infinite loop".into(),
-      ));
+      ParsedFunctionAttribute::NoReturn(_) => {
+        checked_attributes.push(CheckedFunctionAttribute::NoReturn);
+      }
     }
   }
 
   let checked_function = &mut project.functions[function_id];
   checked_function.block = block;
   checked_function.linkage = function_linkage;
+  checked_function.attributes = checked_attributes;
+  checked_function.return_type_id = return_type_id;
 }
 
 fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_id: TypeDeclId) {

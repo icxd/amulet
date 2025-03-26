@@ -1,0 +1,13 @@
+
+fn main() {
+  asm {
+    "cpuid",
+    inputs = [level: register(eax)],
+    outputs = [
+      eax_out: register(eax) => out,
+      ebx_out: register(ebx) => out,
+      ecx_out: register(ecx) => out,
+      edx_out: register(edx) => out
+    ]
+  }
+}

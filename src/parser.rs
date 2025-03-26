@@ -261,14 +261,14 @@ impl Parser {
       || self.current().kind == TokenKind::KwNoReturn
     {
       let attribute = if self.current().kind == TokenKind::KwCallConv {
-        self.expect(TokenKind::KwCallConv)?;
+        let tok = self.expect(TokenKind::KwCallConv)?;
         self.expect(TokenKind::OpenParen)?;
         let conv = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::CloseParen)?;
-        ParsedFunctionAttribute::CallConv(conv.literal)
+        ParsedFunctionAttribute::CallConv(conv.literal, tok.span)
       } else {
-        self.expect(TokenKind::KwNoReturn)?;
-        ParsedFunctionAttribute::NoReturn
+        let tok = self.expect(TokenKind::KwNoReturn)?;
+        ParsedFunctionAttribute::NoReturn(tok.span)
       };
       attributes.push(attribute);
     }
@@ -807,7 +807,10 @@ impl Parser {
                   self.pos += 1;
                 }
                 _ => {
-                  return Err(Diagnostic::error(self.current().span, "expected ']'".to_string()));
+                  return Err(Diagnostic::error(
+                    self.current().span,
+                    "expected ']'".to_string(),
+                  ));
                 }
               }
             } else {
@@ -897,7 +900,10 @@ impl Parser {
 
       TokenKind::Equal => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;
@@ -905,7 +911,10 @@ impl Parser {
       }
       TokenKind::PlusEqual => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;
@@ -913,7 +922,10 @@ impl Parser {
       }
       TokenKind::MinusEqual => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;
@@ -924,7 +936,10 @@ impl Parser {
       }
       TokenKind::AsteriskEqual => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;
@@ -935,7 +950,10 @@ impl Parser {
       }
       TokenKind::SlashEqual => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;
@@ -946,7 +964,10 @@ impl Parser {
       }
       TokenKind::PercentEqual => {
         if !assignable {
-          return Err(Diagnostic::error(span, "assignment is not allowed here".into()));
+          return Err(Diagnostic::error(
+            span,
+            "assignment is not allowed here".into(),
+          ));
         }
 
         self.pos += 1;

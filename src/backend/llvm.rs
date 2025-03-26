@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
 use inkwell::{
+  attributes::AttributeLoc,
   builder::Builder,
   context::{AsContextRef, Context},
   debug_info::{DICompileUnit, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder},
@@ -15,11 +16,10 @@ use inkwell::{
 use crate::{
   ast::{BinaryOperator, DefinitionLinkage, NumericConstant},
   checker::{
-    CheckedBlock, CheckedExpression, CheckedFunction, CheckedStatement, CheckedType,
-    CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
+    CheckedBlock, CheckedExpression, CheckedFunction, CheckedFunctionAttribute, CheckedStatement,
+    CheckedType, CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
   },
   compiler::VOID_TYPE_ID,
-  error::Result,
   Opts,
 };
 
@@ -103,28 +103,23 @@ impl<'ctx> LLVMBackend<'ctx> {
   }
 }
 
-pub fn compile_namespace<'ctx>(
-  backend: &mut LLVMBackend<'ctx>,
-  project: &mut Project,
-) -> Result<()> {
+pub fn compile_namespace<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Project) {
   for type_decl in &project.type_decls.clone() {
-    compile_type_decl(backend, project, type_decl)?;
+    compile_type_decl(backend, project, type_decl);
   }
 
   for function in &project.functions.clone() {
-    compile_function(backend, project, function)?;
+    compile_function(backend, project, function);
   }
-
-  Ok(())
 }
 
 fn compile_type_decl<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   type_decl: &CheckedTypeDecl,
-) -> Result<()> {
+) {
   let CheckedTypeKind::Class(class) = &type_decl.kind else {
-    return Ok(());
+    return;
   };
 
   let field_type_ids = class
@@ -170,15 +165,13 @@ fn compile_type_decl<'ctx>(
     .struct_fields
     .borrow_mut()
     .insert(type_decl.name.clone(), field_names);
-
-  Ok(())
 }
 
 fn compile_function<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   function: &CheckedFunction,
-) -> Result<()> {
+) {
   let return_type = if function.return_type_id == VOID_TYPE_ID {
     backend.context.void_type().as_type_ref()
   } else {
@@ -224,6 +217,9 @@ fn compile_function<'ctx>(
         .borrow_mut()
         .insert(function.name.clone(), fn_value);
 
+      let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
+      backend.builder.position_at_end(entry_basic_block);
+
       for (idx, param) in function.params.iter().enumerate() {
         let param_type = compile_type(backend, project, param_type_ids[idx]);
         let ptr = backend
@@ -240,12 +236,16 @@ fn compile_function<'ctx>(
           .insert(param.name.to_string(), ptr);
       }
 
-      let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
-      backend.builder.position_at_end(entry_basic_block);
+      compile_block(backend, project, function.block.clone());
 
-      compile_block(backend, project, function.block.clone())?;
-
-      if function.return_type_id == VOID_TYPE_ID {
+      if function
+        .attributes
+        .contains(&CheckedFunctionAttribute::NoReturn)
+      {
+        let attribute = backend.context.create_string_attribute("noreturn", "");
+        fn_value.add_attribute(AttributeLoc::Return, attribute);
+        backend.builder.build_unreachable().unwrap();
+      } else if function.return_type_id == VOID_TYPE_ID {
         backend.builder.build_return(None).unwrap();
       }
 
@@ -281,12 +281,6 @@ fn compile_function<'ctx>(
         .builder
         .build_alloca(struct_type, "structure")
         .expect("internal error: failed to build alloca");
-      let struct_value = backend
-        .builder
-        .build_load(struct_type, heap_struct, "structure")
-        .expect("internal error: failed to build load")
-        .into_struct_value();
-
       for (idx, param) in function.params.iter().enumerate() {
         let param_type = compile_type(backend, project, param.type_id);
         let ptr = backend
@@ -308,41 +302,56 @@ fn compile_function<'ctx>(
           .expect("internal error: failed to build load");
         backend
           .builder
-          .build_insert_value(struct_value, value, idx as u32, param.name.as_str())
+          .build_insert_value(
+            backend
+              .builder
+              .build_load(struct_type, heap_struct, "structure")
+              .expect("internal error: failed to build load")
+              .into_struct_value(),
+            value,
+            idx as u32,
+            param.name.as_str(),
+          )
           .expect("internal error: failed to build insert value");
       }
 
       backend
         .builder
-        .build_return(Some(&struct_value))
+        .build_return(Some(
+          &backend
+            .builder
+            .build_load(struct_type, heap_struct, "structure")
+            .expect("internal error: failed to build load")
+            .into_struct_value(),
+        ))
         .expect("internal error: failed to build return");
     }
   }
-
-  Ok(())
 }
 
 fn compile_block<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   block: CheckedBlock,
-) -> Result<()> {
+) -> () {
   for stmt in &block.stmts {
-    compile_statement(backend, project, stmt)?;
+    compile_statement(backend, project, stmt);
   }
-
-  Ok(())
 }
 
 fn compile_statement<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   stmt: &CheckedStatement,
-) -> Result<()> {
+) {
   match stmt {
     CheckedStatement::VarDecl(var_decl, expr) => {
       let compiled_type = compile_type(backend, project, var_decl.type_id);
-      let value = compile_expression(backend, project, expr)?;
+      let value = compile_expression(backend, project, expr);
+
+      assert!(value.is_some());
+      let value = value.unwrap();
+
       let alloca = backend
         .builder
         .build_alloca(compiled_type, var_decl.name.as_str())
@@ -376,7 +385,10 @@ fn compile_statement<'ctx>(
         .expect("internal error: failed to build branch");
 
       backend.builder.position_at_end(entry_basic_block);
-      let condition = compile_expression(backend, project, condition)?;
+      let condition = compile_expression(backend, project, condition);
+
+      assert!(condition.is_some());
+      let condition = condition.unwrap();
 
       backend
         .builder
@@ -389,7 +401,7 @@ fn compile_statement<'ctx>(
 
       backend.builder.position_at_end(loop_basic_block);
 
-      compile_block(backend, project, block.clone())?;
+      compile_block(backend, project, block.clone());
 
       backend
         .builder
@@ -413,7 +425,7 @@ fn compile_statement<'ctx>(
         .expect("internal error: failed to build branch");
 
       backend.builder.position_at_end(entry_basic_block);
-      compile_block(backend, project, block.clone())?;
+      compile_block(backend, project, block.clone());
 
       backend
         .builder
@@ -424,10 +436,10 @@ fn compile_statement<'ctx>(
     }
 
     CheckedStatement::Return(expr) => {
-      let value = compile_expression(backend, project, expr)?;
+      let value = compile_expression(backend, project, expr);
       backend
         .builder
-        .build_return(Some(&value))
+        .build_return(Some(&value.unwrap()))
         .expect("internal error: failed to build return");
     }
 
@@ -451,27 +463,25 @@ fn compile_statement<'ctx>(
     }
 
     CheckedStatement::Expression(expr) => {
-      let _ = compile_expression(backend, project, expr)?;
+      let _ = compile_expression(backend, project, expr);
     }
 
     _ => todo!("compile_statement not implemented for {:?}", stmt),
   }
-
-  Ok(())
 }
 
 fn compile_expression<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   expr: &CheckedExpression,
-) -> Result<BasicValueEnum<'ctx>> {
+) -> Option<BasicValueEnum<'ctx>> {
   match expr {
     CheckedExpression::Null(span, _) => todo!("{:?}", span),
 
     CheckedExpression::Nullptr(_, type_id) => {
       let compiled_type = compile_type(backend, project, *type_id);
       let value = compiled_type.into_pointer_type().const_null();
-      Ok(BasicValueEnum::PointerValue(value))
+      Some(BasicValueEnum::PointerValue(value))
     }
 
     CheckedExpression::NumericConstant(constant, type_id, _) => {
@@ -479,112 +489,111 @@ fn compile_expression<'ctx>(
       match constant {
         NumericConstant::I8(value) => {
           let value = i8::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::I16(value) => {
           let value = i16::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::I32(value) => {
           let value = i32::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::I64(value) => {
           let value = i64::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::I128(value) => {
           let value = i128::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::Isz(value) => {
           let value = isize::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::U8(value) => {
           let value = u8::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::U16(value) => {
           let value = u16::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::U32(value) => {
           let value = u32::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::U64(value) => {
           let value = u64::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::U128(value) => {
           let value = u128::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::Usz(value) => {
           let value = usize::try_from(*value).unwrap();
-          Ok(BasicValueEnum::IntValue(
+          Some(BasicValueEnum::IntValue(
             compiled_type.into_int_type().const_int(value as u64, false),
           ))
         }
 
         NumericConstant::F32(value) => {
           let value = f32::try_from(*value).unwrap();
-          Ok(BasicValueEnum::FloatValue(
+          Some(BasicValueEnum::FloatValue(
             compiled_type.into_float_type().const_float(value as f64),
           ))
         }
 
         NumericConstant::F64(value) => {
           let value = f64::try_from(*value).unwrap();
-          Ok(BasicValueEnum::FloatValue(
+          Some(BasicValueEnum::FloatValue(
             compiled_type.into_float_type().const_float(value),
           ))
         }
       }
     }
 
-    CheckedExpression::Boolean(value, _) => Ok(BasicValueEnum::IntValue(
+    CheckedExpression::Boolean(value, _) => Some(BasicValueEnum::IntValue(
       backend.context.bool_type().const_int(*value as u64, false),
     )),
 
     CheckedExpression::CharacterLiteral(c, _) => {
-      // TODO: this is probably wrong
       let value = i8::try_from(*c as i8).unwrap();
-      Ok(BasicValueEnum::IntValue(
+      Some(BasicValueEnum::IntValue(
         backend.context.i8_type().const_int(value as u64, false),
       ))
     }
@@ -606,7 +615,7 @@ fn compile_expression<'ctx>(
         )
         .expect("internal error: failed to build bitcast");
 
-      Ok(BasicValueEnum::PointerValue(ptr.into_pointer_value()))
+      Some(BasicValueEnum::PointerValue(ptr.into_pointer_value()))
     }
 
     CheckedExpression::Variable(var, _) => {
@@ -616,7 +625,7 @@ fn compile_expression<'ctx>(
         .builder
         .build_load(ty, ptr, "tmp")
         .expect("internal error: failed to build load");
-      Ok(value)
+      Some(value)
     }
 
     CheckedExpression::BinaryOp(lhs, op, rhs, _, _) => {
@@ -635,7 +644,7 @@ fn compile_expression<'ctx>(
             .variable_ptrs
             .borrow_mut()
             .insert(var.name.clone(), var_ptr);
-          return Ok(rhs);
+          return Some(rhs);
         } else {
           let lhs_type_id = lhs.type_id(project);
           let lhs_type = compile_type(backend, project, lhs_type_id);
@@ -663,7 +672,7 @@ fn compile_expression<'ctx>(
 
           backend.builder.build_store(lhs_ptr, value).unwrap();
 
-          return Ok(BasicValueEnum::PointerValue(value));
+          return Some(BasicValueEnum::PointerValue(value));
         }
       }
 
@@ -689,7 +698,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int add");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -700,7 +709,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float add");
-            Ok(BasicValueEnum::FloatValue(value))
+            Some(BasicValueEnum::FloatValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -715,7 +724,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int sub");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -726,7 +735,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float sub");
-            Ok(BasicValueEnum::FloatValue(value))
+            Some(BasicValueEnum::FloatValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -741,7 +750,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int mul");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -752,7 +761,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float mul");
-            Ok(BasicValueEnum::FloatValue(value))
+            Some(BasicValueEnum::FloatValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -767,7 +776,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int div");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -778,7 +787,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float div");
-            Ok(BasicValueEnum::FloatValue(value))
+            Some(BasicValueEnum::FloatValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -793,7 +802,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int rem");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -809,7 +818,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int eq");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -821,7 +830,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float eq");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::PointerType(_) => {
             let value = backend
@@ -833,7 +842,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build ptr eq");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -849,7 +858,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int ne");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -861,7 +870,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float ne");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::PointerType(_) => {
             let value = backend
@@ -873,7 +882,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build ptr ne");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -889,7 +898,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int lt");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -901,7 +910,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float lt");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -917,7 +926,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int le");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -929,7 +938,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float le");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -945,7 +954,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int gt");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -957,7 +966,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float gt");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -973,7 +982,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build int ge");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           BasicTypeEnum::FloatType(_) => {
             let value = backend
@@ -985,7 +994,7 @@ fn compile_expression<'ctx>(
                 "tmp",
               )
               .expect("internal error: failed to build float ge");
-            Ok(BasicValueEnum::IntValue(value))
+            Some(BasicValueEnum::IntValue(value))
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
@@ -1016,11 +1025,11 @@ fn compile_expression<'ctx>(
                 .builder
                 .build_int_cast(compiled_expr.into_int_value(), ty.into_int_type(), "tmp")
                 .expect("internal error: failed to build int cast");
-              Ok(BasicValueEnum::IntValue(value))
+              Some(BasicValueEnum::IntValue(value))
             }
 
             (BasicTypeEnum::FloatType(_), BasicTypeEnum::FloatType(_)) => {
-              Ok(BasicValueEnum::FloatValue(compiled_expr.into_float_value()))
+              Some(BasicValueEnum::FloatValue(compiled_expr.into_float_value()))
             }
 
             (BasicTypeEnum::PointerType(_), BasicTypeEnum::IntType(_)) => {
@@ -1032,7 +1041,7 @@ fn compile_expression<'ctx>(
                   "tmp",
                 )
                 .expect("internal error: failed to build ptr to int");
-              Ok(BasicValueEnum::IntValue(value))
+              Some(BasicValueEnum::IntValue(value))
             }
 
             (BasicTypeEnum::IntType(_), BasicTypeEnum::PointerType(_)) => {
@@ -1044,10 +1053,10 @@ fn compile_expression<'ctx>(
                   "tmp",
                 )
                 .expect("internal error: failed to build int to ptr");
-              Ok(BasicValueEnum::PointerValue(value))
+              Some(BasicValueEnum::PointerValue(value))
             }
 
-            (BasicTypeEnum::PointerType(_), BasicTypeEnum::PointerType(_)) => Ok(
+            (BasicTypeEnum::PointerType(_), BasicTypeEnum::PointerType(_)) => Some(
               BasicValueEnum::PointerValue(compiled_expr.into_pointer_value()),
             ),
 
@@ -1084,7 +1093,7 @@ fn compile_expression<'ctx>(
             .builder
             .build_load(compiled_type, value, "tmp")
             .expect("internal error: failed to build load");
-          Ok(value)
+          Some(value)
         }
 
         _ => panic!("internal error: invalid type in indexed expression in codegen"),
@@ -1108,8 +1117,10 @@ fn compile_expression<'ctx>(
         .expect("internal error: failed to build call");
 
       let value = value.try_as_basic_value();
-      if value.is_right() {}
-      Ok(value.unwrap_left())
+      if value.is_right() {
+        return None;
+      }
+      Some(value.unwrap_left())
     }
 
     CheckedExpression::IndexedStruct(expr, name, type_decl_id, _, _) => {
@@ -1139,7 +1150,7 @@ fn compile_expression<'ctx>(
         .builder
         .build_extract_value(compiled_expr.into_struct_value(), idx as u32, "tmp")
         .unwrap();
-      Ok(value)
+      Some(value)
     }
 
     _ => todo!("compile_expression not implemented for {:?}", expr),

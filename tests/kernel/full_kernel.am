@@ -6,13 +6,7 @@ fn strlen(s: c_char*) -> usz {
   return i;
 }
 
-fn hang() noreturn {
-  loop {
-    asm { "cli" "hlt" }
-  }
-}
-
-fn kmain() callconv(C) {
+fn kmain(magic: u32, mboot_info: void*) callconv(C) {
   mut video_buffer = 0xb8000 as u8*;
   let text = c"Hello, world!\n";
 
@@ -23,5 +17,5 @@ fn kmain() callconv(C) {
     i += 1 as usz;
   }
 
-  hang();
+  loop {}
 }

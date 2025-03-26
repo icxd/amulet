@@ -289,8 +289,8 @@ pub enum DefinitionLinkage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedFunctionAttribute {
-  CallConv(String),
-  NoReturn,
+  CallConv(String, Span),
+  NoReturn(Span),
 }
 
 #[derive(Debug)]
