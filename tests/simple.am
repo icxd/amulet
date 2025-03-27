@@ -1,5 +1,8 @@
 fn main() -> i32 {
-  let a = Optional(42, true);
-  let value = a.value;
-  return value;
+  mut a = 0x1000 as c_char*;
+
+  let b = a[0];
+  a[0] = 'a';
+
+  return 0 as i32;
 }

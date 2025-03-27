@@ -422,6 +422,7 @@ pub enum BinaryOperator {
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
   As(ParsedType),
+  Dereference,
 }
 
 impl ParsedExpression {

@@ -210,6 +210,7 @@ impl CheckedExpression {
       CheckedExpression::Variable(var, _) => var.mutable,
       CheckedExpression::IndexedExpression(expr, _, _, _) => expr.is_mutable(),
       CheckedExpression::IndexedStruct(expr, _, _, _, _) => expr.is_mutable(),
+      CheckedExpression::UnaryOp(expr, _, _, _) => expr.is_mutable(),
       _ => false,
     }
   }
@@ -1806,6 +1807,7 @@ fn typecheck_expression(
       let checked_expr = typecheck_expression(expr, scope_id, None, project);
 
       let checked_op = match op {
+        UnaryOperator::Dereference => CheckedUnaryOperator::Dereference,
         UnaryOperator::As(type_name) => {
           let type_id = typecheck_typename(type_name, scope_id, project);
 

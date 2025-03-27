@@ -783,6 +783,11 @@ impl Parser {
               }
             }
 
+            TokenKind::Asterisk => {
+              self.pos += 1;
+              expr = ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Dereference, span);
+            }
+
             _ => {
               self.pos += 1;
               return Err(Diagnostic::error(

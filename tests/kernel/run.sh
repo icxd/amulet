@@ -1,3 +1,5 @@
+set -xe 
+
 ../../target/debug/amulet kernel.am --nostdlib --target=i386-elf
 
 clang --target=i386-elf -g -fno-PIC -W -Wall -ffreestanding -mno-red-zone \

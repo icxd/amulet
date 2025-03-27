@@ -457,7 +457,7 @@ fn compile_statement<'ctx>(
         );
         backend
           .builder
-          .build_indirect_call(asm_fn, asm, &[], "tmp")
+          .build_indirect_call(asm_fn, asm, &[], "")
           .unwrap();
       }
     }
@@ -623,56 +623,66 @@ fn compile_expression<'ctx>(
       let ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
       let value = backend
         .builder
-        .build_load(ty, ptr, "tmp")
+        .build_load(ty, ptr, "")
         .expect("internal error: failed to build load");
       Some(value)
     }
 
     CheckedExpression::BinaryOp(lhs, op, rhs, _, _) => {
       if matches!(op, BinaryOperator::Assign) {
-        if let CheckedExpression::Variable(var, _) = *lhs.clone() {
-          let type_id = lhs.type_id(project);
-          let ty = compile_type(backend, project, type_id);
-          let rhs = compile_expression(backend, project, rhs)?;
-          let var_ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
-          backend
-            .builder
-            .build_store(var_ptr, rhs)
-            .expect("internal error: failed to build store");
-          backend.variables.borrow_mut().insert(var.name.clone(), ty);
-          backend
-            .variable_ptrs
-            .borrow_mut()
-            .insert(var.name.clone(), var_ptr);
-          return Some(rhs);
-        } else {
-          let lhs_type_id = lhs.type_id(project);
-          let lhs_type = compile_type(backend, project, lhs_type_id);
-
-          let lhs = compile_expression(backend, project, lhs)?;
-
-          let lhs_ptr = backend
-            .builder
-            .build_alloca(lhs_type, "tmp")
-            .expect("internal error: failed to build alloca");
-          backend
-            .builder
-            .build_store(lhs_ptr, lhs)
-            .expect("internal error: failed to build store");
-
-          let rhs = compile_expression(backend, project, rhs)?;
-
-          let ty = compile_type(backend, project, lhs_type_id);
-          let value = unsafe {
+        match *lhs.clone() {
+          CheckedExpression::Variable(var, _) => {
+            let type_id = lhs.type_id(project);
+            let ty = compile_type(backend, project, type_id);
+            let rhs = compile_expression(backend, project, rhs)?;
+            let var_ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
             backend
               .builder
-              .build_gep(ty, lhs_ptr, &[rhs.into_int_value()], "tmp")
-              .expect("internal error: failed to build gep")
-          };
+              .build_store(var_ptr, rhs)
+              .expect("internal error: failed to build store");
+            backend.variables.borrow_mut().insert(var.name.clone(), ty);
+            backend
+              .variable_ptrs
+              .borrow_mut()
+              .insert(var.name.clone(), var_ptr);
+            return None;
+          }
 
-          backend.builder.build_store(lhs_ptr, value).unwrap();
+          CheckedExpression::UnaryOp(expr, CheckedUnaryOperator::Dereference, _, _) => {
+            let lhs = compile_expression(backend, project, &*expr)?;
+            let rhs = compile_expression(backend, project, rhs)?;
+            backend
+              .builder
+              .build_store(lhs.into_pointer_value(), rhs)
+              .unwrap();
+            return None;
+          }
 
-          return Some(BasicValueEnum::PointerValue(value));
+          CheckedExpression::IndexedExpression(expr, idx, type_id, _) => {
+            let compiled_expr = compile_expression(backend, project, &*expr)?;
+            let compiled_idx = compile_expression(backend, project, &*idx)?;
+            let compiled_rhs = compile_expression(backend, project, rhs)?;
+            let pointee_ty = compile_type(backend, project, type_id);
+
+            let value = unsafe {
+              backend
+                .builder
+                .build_in_bounds_gep(
+                  pointee_ty,
+                  compiled_expr.into_pointer_value(),
+                  &[compiled_idx.into_int_value()],
+                  "",
+                )
+                .expect("internal error: failed to build inbounds gep")
+            };
+            backend
+              .builder
+              .build_store(value, compiled_rhs)
+              .expect("internal error: failed to build store");
+            return None;
+          }
+
+          _ => unreachable!(),
         }
       }
 
@@ -695,7 +705,7 @@ fn compile_expression<'ctx>(
               .build_int_add(
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int add");
             Some(BasicValueEnum::IntValue(value))
@@ -706,7 +716,7 @@ fn compile_expression<'ctx>(
               .build_float_add(
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float add");
             Some(BasicValueEnum::FloatValue(value))
@@ -721,7 +731,7 @@ fn compile_expression<'ctx>(
               .build_int_sub(
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int sub");
             Some(BasicValueEnum::IntValue(value))
@@ -732,7 +742,7 @@ fn compile_expression<'ctx>(
               .build_float_sub(
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float sub");
             Some(BasicValueEnum::FloatValue(value))
@@ -747,7 +757,7 @@ fn compile_expression<'ctx>(
               .build_int_mul(
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int mul");
             Some(BasicValueEnum::IntValue(value))
@@ -758,7 +768,7 @@ fn compile_expression<'ctx>(
               .build_float_mul(
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float mul");
             Some(BasicValueEnum::FloatValue(value))
@@ -773,7 +783,7 @@ fn compile_expression<'ctx>(
               .build_int_signed_div(
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int div");
             Some(BasicValueEnum::IntValue(value))
@@ -784,7 +794,7 @@ fn compile_expression<'ctx>(
               .build_float_div(
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float div");
             Some(BasicValueEnum::FloatValue(value))
@@ -799,7 +809,7 @@ fn compile_expression<'ctx>(
               .build_int_signed_rem(
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int rem");
             Some(BasicValueEnum::IntValue(value))
@@ -815,7 +825,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::EQ,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int eq");
             Some(BasicValueEnum::IntValue(value))
@@ -827,7 +837,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::OEQ,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float eq");
             Some(BasicValueEnum::IntValue(value))
@@ -839,7 +849,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::EQ,
                 compiled_lhs.into_pointer_value(),
                 compiled_rhs.into_pointer_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build ptr eq");
             Some(BasicValueEnum::IntValue(value))
@@ -855,7 +865,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::NE,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int ne");
             Some(BasicValueEnum::IntValue(value))
@@ -867,7 +877,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::ONE,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float ne");
             Some(BasicValueEnum::IntValue(value))
@@ -879,7 +889,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::NE,
                 compiled_lhs.into_pointer_value(),
                 compiled_rhs.into_pointer_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build ptr ne");
             Some(BasicValueEnum::IntValue(value))
@@ -895,7 +905,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::SLT,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int lt");
             Some(BasicValueEnum::IntValue(value))
@@ -907,7 +917,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::OLT,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float lt");
             Some(BasicValueEnum::IntValue(value))
@@ -923,7 +933,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::SLE,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int le");
             Some(BasicValueEnum::IntValue(value))
@@ -935,7 +945,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::OLE,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float le");
             Some(BasicValueEnum::IntValue(value))
@@ -951,7 +961,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::SGT,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int gt");
             Some(BasicValueEnum::IntValue(value))
@@ -963,7 +973,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::OGT,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float gt");
             Some(BasicValueEnum::IntValue(value))
@@ -979,7 +989,7 @@ fn compile_expression<'ctx>(
                 IntPredicate::SGE,
                 compiled_lhs.into_int_value(),
                 compiled_rhs.into_int_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build int ge");
             Some(BasicValueEnum::IntValue(value))
@@ -991,7 +1001,7 @@ fn compile_expression<'ctx>(
                 FloatPredicate::OGE,
                 compiled_lhs.into_float_value(),
                 compiled_rhs.into_float_value(),
-                "tmp",
+                "",
               )
               .expect("internal error: failed to build float ge");
             Some(BasicValueEnum::IntValue(value))
@@ -1023,7 +1033,7 @@ fn compile_expression<'ctx>(
             (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
               let value = backend
                 .builder
-                .build_int_cast(compiled_expr.into_int_value(), ty.into_int_type(), "tmp")
+                .build_int_cast(compiled_expr.into_int_value(), ty.into_int_type(), "")
                 .expect("internal error: failed to build int cast");
               Some(BasicValueEnum::IntValue(value))
             }
@@ -1035,11 +1045,7 @@ fn compile_expression<'ctx>(
             (BasicTypeEnum::PointerType(_), BasicTypeEnum::IntType(_)) => {
               let value = backend
                 .builder
-                .build_ptr_to_int(
-                  compiled_expr.into_pointer_value(),
-                  ty.into_int_type(),
-                  "tmp",
-                )
+                .build_ptr_to_int(compiled_expr.into_pointer_value(), ty.into_int_type(), "")
                 .expect("internal error: failed to build ptr to int");
               Some(BasicValueEnum::IntValue(value))
             }
@@ -1047,11 +1053,7 @@ fn compile_expression<'ctx>(
             (BasicTypeEnum::IntType(_), BasicTypeEnum::PointerType(_)) => {
               let value = backend
                 .builder
-                .build_int_to_ptr(
-                  compiled_expr.into_int_value(),
-                  ty.into_pointer_type(),
-                  "tmp",
-                )
+                .build_int_to_ptr(compiled_expr.into_int_value(), ty.into_pointer_type(), "")
                 .expect("internal error: failed to build int to ptr");
               Some(BasicValueEnum::PointerValue(value))
             }
@@ -1064,40 +1066,45 @@ fn compile_expression<'ctx>(
           }
         }
 
-        CheckedUnaryOperator::Dereference => todo!("{:?}", op),
+        CheckedUnaryOperator::Dereference => {
+          let expr_type = &project.types[type_id];
+
+          let CheckedType::RawPtr(inner_type_id, _) = expr_type else {
+            panic!("internal error: expected raw pointer type");
+          };
+
+          let inner_type = compile_type(backend, project, *inner_type_id);
+          let value = backend
+            .builder
+            .build_load(inner_type, compiled_expr.into_pointer_value(), "")
+            .expect("internal error: failed to build load");
+          Some(value)
+        }
       }
     }
 
     CheckedExpression::IndexedExpression(expr, idx, type_id, _) => {
-      let compiled_expr = compile_expression(backend, project, expr)?;
-      let compiled_idx = compile_expression(backend, project, idx)?;
+      let compiled_expr = compile_expression(backend, project, &*expr)?;
+      let compiled_idx = compile_expression(backend, project, &*idx)?;
+      let pointee_ty = compile_type(backend, project, *type_id);
 
-      let compiled_type = compile_type(backend, project, *type_id);
+      let value = unsafe {
+        backend
+          .builder
+          .build_in_bounds_gep(
+            pointee_ty,
+            compiled_expr.into_pointer_value(),
+            &[compiled_idx.into_int_value()],
+            "",
+          )
+          .expect("internal error: failed to build inbounds gep")
+      };
+      let value = backend
+        .builder
+        .build_load(pointee_ty, value, "")
+        .expect("internal error: failed to build load");
 
-      let expr_type_id = expr.type_id(project);
-      let compiled_expr_type = compile_type(backend, project, expr_type_id);
-      match compiled_expr_type {
-        BasicTypeEnum::PointerType(_) => {
-          let value = unsafe {
-            backend
-              .builder
-              .build_gep(
-                compiled_expr_type,
-                compiled_expr.into_pointer_value(),
-                &[compiled_idx.into_int_value()],
-                "tmp",
-              )
-              .expect("internal error: failed to build gep")
-          };
-          let value = backend
-            .builder
-            .build_load(compiled_type, value, "tmp")
-            .expect("internal error: failed to build load");
-          Some(value)
-        }
-
-        _ => panic!("internal error: invalid type in indexed expression in codegen"),
-      }
+      Some(value)
     }
 
     CheckedExpression::Call(call, _, _) => {
@@ -1113,7 +1120,7 @@ fn compile_expression<'ctx>(
 
       let value = backend
         .builder
-        .build_call(callee.clone(), args.as_slice(), "tmp")
+        .build_call(callee.clone(), args.as_slice(), "")
         .expect("internal error: failed to build call");
 
       let value = value.try_as_basic_value();
@@ -1148,7 +1155,7 @@ fn compile_expression<'ctx>(
 
       let value = backend
         .builder
-        .build_extract_value(compiled_expr.into_struct_value(), idx as u32, "tmp")
+        .build_extract_value(compiled_expr.into_struct_value(), idx as u32, "")
         .unwrap();
       Some(value)
     }

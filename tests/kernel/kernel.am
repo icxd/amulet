@@ -33,8 +33,6 @@ fn kmain(magic: u32, mboot_info: MultibootInfo*) callconv(C) {
   mut video_buffer = 0xb8000 as u8*;
   let text = c"Hello, world!";
 
-  *video_buffer = 'a' as c_char;
-
   mut i = 0 as usz;
   while text[i] != 0 as c_char {
     video_buffer[i * 2] = text[i] as u8;
