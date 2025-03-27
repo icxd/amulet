@@ -15,6 +15,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Install Polly
+      run: sudo apt install libpolly-18-dev
+      
     - name: Install LLVM and Clang
       uses: KyleMayes/install-llvm-action@v2.0.6
       with:
