@@ -1621,7 +1621,7 @@ fn typecheck_statement(
         let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
         let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
 
-        if let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = checked_param {
+        if let CheckedInlineAsmParameter::Register(ref reg_type, _) = checked_param {
           if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
             if checked_expr.type_id(project) != *type_id {
               project.add_diagnostic(Diagnostic::error(
