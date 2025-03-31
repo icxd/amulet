@@ -331,6 +331,27 @@ pub struct ParsedBlock {
   pub(crate) span: Span,
 }
 
+pub mod inline_asm {
+  #[derive(Debug, Clone)]
+  pub enum RegisterType {
+    None,
+    In,
+    Out(super::ParsedType),
+  }
+
+  #[derive(Debug, Clone)]
+  pub enum Parameter {
+    Register(RegisterType, String, super::Span),
+  }
+
+  #[derive(Debug, Clone)]
+  pub struct Binding {
+    pub(crate) var: super::ParsedExpression,
+    pub(crate) parameter: Parameter,
+    pub(crate) span: super::Span,
+  }
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedStatement {
   VarDecl(ParsedVarDecl, ParsedExpression, Span),
@@ -345,8 +366,11 @@ pub enum ParsedStatement {
   While(ParsedExpression, ParsedBlock, Span),
   Loop(ParsedBlock, Span),
 
-  // FIXME: This currently doesn't support using variables in the assembly code.
-  InlineAsm(Vec<String>, Span),
+  InlineAsm {
+    asm: Vec<String>,
+    bindings: Vec<inline_asm::Binding>,
+    clobbers: Vec<inline_asm::Parameter>,
+  },
 
   Break(Span),
   Continue(Span),

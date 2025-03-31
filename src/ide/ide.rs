@@ -1,8 +1,5 @@
 use super::symbol::{Symbol, SymbolKind};
-use crate::{
-  checker::{Project, Scope},
-  span::Span,
-};
+use crate::checker::{Project, Scope};
 
 pub fn get_symbols(project: &Project) -> Vec<Symbol> {
   let mut symbols = vec![];

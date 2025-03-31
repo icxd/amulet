@@ -2,7 +2,7 @@ use log::trace;
 
 use crate::{
   ast::{
-    BinaryOperator, DefinitionLinkage, NumericConstant, ParsedBlock, ParsedCall, ParsedConst,
+    inline_asm, BinaryOperator, DefinitionLinkage, ParsedBlock, ParsedCall, ParsedConst,
     ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
     ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
   },
@@ -442,17 +442,7 @@ impl Parser {
         Ok(ParsedStatement::Loop(body.clone(), span.join(&body.span)))
       }
 
-      TokenKind::KwAsm => {
-        let span = self.expect(TokenKind::KwAsm)?.span;
-        self.expect(TokenKind::OpenBrace)?;
-        let mut asm = vec![];
-        while self.current().kind != TokenKind::CloseBrace {
-          let line = self.expect(TokenKind::String)?;
-          asm.push(line.literal);
-        }
-        self.expect(TokenKind::CloseBrace)?;
-        Ok(ParsedStatement::InlineAsm(asm, span))
-      }
+      TokenKind::KwAsm => Ok(self.parse_inline_asm()?),
 
       TokenKind::KwBreak => {
         let span = self.expect(TokenKind::KwBreak)?.span;
@@ -476,6 +466,108 @@ impl Parser {
         Ok(ParsedStatement::Expression(expr))
       }
     }
+  }
+
+  fn parse_inline_asm_parameter(&mut self) -> Result<inline_asm::Parameter> {
+    trace!("parse_inline_asm_parameter: {:?}", self.current());
+
+    match self.current().kind {
+      TokenKind::KwReg => {
+        self.expect(TokenKind::KwReg)?;
+        self.expect(TokenKind::OpenParen)?;
+        let reg = self.expect(TokenKind::Identifier)?;
+        let reg_type = match self.current().kind {
+          TokenKind::KwIn => {
+            self.expect(TokenKind::KwIn)?;
+            inline_asm::RegisterType::In
+          }
+          TokenKind::KwOut => {
+            self.expect(TokenKind::KwOut)?;
+            self.expect(TokenKind::Arrow)?;
+            let type_ = self.parse_type()?;
+            inline_asm::RegisterType::Out(type_)
+          }
+          TokenKind::CloseParen => inline_asm::RegisterType::None,
+          _ => {
+            return Err(Diagnostic::error(
+              self.current().span,
+              format!("expected `in` or `out` but found {}", self.current().kind),
+            ));
+          }
+        };
+        self.expect(TokenKind::CloseParen)?;
+
+        Ok(inline_asm::Parameter::Register(
+          reg_type,
+          reg.literal.clone(),
+          reg.span,
+        ))
+      }
+
+      _ => {
+        return Err(Diagnostic::error(
+          self.current().span,
+          format!(
+            "expected inline asm parameter but found {}",
+            self.current().kind
+          ),
+        ));
+      }
+    }
+  }
+
+  fn parse_inline_asm(&mut self) -> Result<ParsedStatement> {
+    trace!("parse_inline_asm: {:?}", self.current());
+    self.expect(TokenKind::KwAsm)?;
+
+    let mut asm = vec![];
+    let mut bindings = vec![];
+    let mut clobbers = vec![];
+
+    self.expect(TokenKind::OpenBrace)?;
+    while self.current().kind != TokenKind::CloseBrace {
+      while self.current().kind == TokenKind::String {
+        let string = self.expect(TokenKind::String)?;
+        asm.push(string.literal);
+      }
+
+      while self.current().kind == TokenKind::KwBind {
+        self.expect(TokenKind::KwBind)?;
+        self.expect(TokenKind::OpenParen)?;
+        let var = self.parse_expression(false)?;
+        self.expect(TokenKind::Colon)?;
+        let parameter = self.parse_inline_asm_parameter()?;
+        self.expect(TokenKind::CloseParen)?;
+
+        bindings.push(inline_asm::Binding {
+          var: var.clone(),
+          parameter,
+          span: var.span(),
+        });
+      }
+
+      if self.current().kind == TokenKind::KwClobber {
+        self.expect(TokenKind::KwClobber)?;
+        self.expect(TokenKind::OpenBracket)?;
+        while self.current().kind != TokenKind::CloseBracket {
+          let clobber = self.parse_inline_asm_parameter()?;
+          clobbers.push(clobber);
+          if self.current().kind == TokenKind::Comma {
+            self.expect(TokenKind::Comma)?;
+          } else {
+            break;
+          }
+        }
+        self.expect(TokenKind::CloseBracket)?;
+      }
+    }
+    self.expect(TokenKind::CloseBrace)?;
+
+    Ok(ParsedStatement::InlineAsm {
+      asm,
+      bindings,
+      clobbers,
+    })
   }
 
   fn parse_expression(&mut self, assignable: bool) -> Result<ParsedExpression> {
@@ -585,53 +677,15 @@ impl Parser {
 
     let mut expr = match self.current().kind {
       TokenKind::Integer => {
+        let constant = self.current().constant.clone().unwrap();
         self.pos += 1;
-        let value = name.parse::<i128>().unwrap();
-
-        let constant = if value < i8::MAX as i128 {
-          if value < 0 {
-            NumericConstant::I8(value as i8)
-          } else {
-            NumericConstant::U8(value as u8)
-          }
-        } else if value < i16::MAX as i128 {
-          if value < 0 {
-            NumericConstant::I16(value as i16)
-          } else {
-            NumericConstant::U16(value as u16)
-          }
-        } else if value < i32::MAX as i128 {
-          if value < 0 {
-            NumericConstant::I32(value as i32)
-          } else {
-            NumericConstant::U32(value as u32)
-          }
-        } else if value < i64::MAX as i128 {
-          if value < 0 {
-            NumericConstant::I64(value as i64)
-          } else {
-            NumericConstant::U64(value as u64)
-          }
-        } else {
-          if value < 0 {
-            NumericConstant::I128(value as i128)
-          } else {
-            NumericConstant::U128(value as u128)
-          }
-        };
-
         ParsedExpression::NumericConstant(constant, span)
       }
 
       TokenKind::Float => {
+        let constant = self.current().constant.clone().unwrap();
         self.pos += 1;
-        ParsedExpression::NumericConstant(
-          match name.parse::<f64>() {
-            Ok(value) => NumericConstant::F64(value),
-            Err(_) => return Err(Diagnostic::error(span, "float is too big".into())),
-          },
-          span,
-        )
+        ParsedExpression::NumericConstant(constant, span)
       }
 
       TokenKind::String => {
@@ -646,8 +700,12 @@ impl Parser {
 
       TokenKind::Identifier if name == "c" => {
         let c = self.expect(TokenKind::Identifier)?;
-        let string = self.expect(TokenKind::String)?;
-        ParsedExpression::QuotedCString(string.literal, c.span.join(&string.span))
+        if self.current().kind == TokenKind::String {
+          let string = self.expect(TokenKind::String)?;
+          ParsedExpression::QuotedCString(string.literal, c.span.join(&string.span))
+        } else {
+          ParsedExpression::Var(name, c.span)
+        }
       }
 
       TokenKind::Identifier if name == "true" => {

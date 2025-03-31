@@ -1,6 +1,6 @@
-// native fn malloc(size: usz) -> void*;
-// native fn realloc(ptr: void*, new_size: usz) -> void*;
-// native fn free(ptr: void*);
+native fn malloc(size: usz) -> void*
+native fn realloc(ptr: void*, new_size: usz) -> void*
+native fn free(ptr: void*)
 
 type Iterable<T> = interface {
   fn iterator(self) -> Iterator<T>;
@@ -40,12 +40,12 @@ type Array<T> = class Collection<T> & Iterable<T> {
   
   fn append(mut self, value: T) {
     if (self.capacity == 0) {
-      self.data = malloc(sizeof T * INITIAL_ARRAY_CAP) as! T*;
+      self.data = malloc(sizeof T * INITIAL_ARRAY_CAP) as T*;
       self.capacity = INITIAL_ARRAY_CAP;
     }
     if (self.size >= self.capacity) {
       self.capacity = self.capacity * 2;
-      self.data = realloc(self.data, sizeof T * self.capacity) as! T*;
+      self.data = realloc(self.data, sizeof T * self.capacity) as T*;
     }
     self.data[self.size] = value;
     self.size += 1;

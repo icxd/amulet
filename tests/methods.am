@@ -1,0 +1,8 @@
+type Optional<T> = class {
+  let value: T;
+  let is_some: bool;
+};
+
+fn main() {
+  let my_value = Optional<i32>(42 as i32, true);
+}

@@ -443,23 +443,27 @@ fn compile_statement<'ctx>(
         .expect("internal error: failed to build return");
     }
 
-    CheckedStatement::InlineAsm(lines, _) => {
-      let asm_fn = backend.context.void_type().fn_type(&[], false);
-      for line in lines.iter() {
-        let asm = backend.context.create_inline_asm(
-          asm_fn,
-          line.to_string(),
-          "".into(),
-          false,
-          false,
-          None,
-          false,
-        );
-        backend
-          .builder
-          .build_indirect_call(asm_fn, asm, &[], "")
-          .unwrap();
-      }
+    CheckedStatement::InlineAsm {
+      asm,
+      bindings,
+      clobbers,
+    } => {
+      // let asm_fn = backend.context.void_type().fn_type(&[], false);
+      // for line in lines.iter() {
+      //   let asm = backend.context.create_inline_asm(
+      //     asm_fn,
+      //     line.to_string(),
+      //     "".into(),
+      //     false,
+      //     false,
+      //     None,
+      //     false,
+      //   );
+      //   backend
+      //     .builder
+      //     .build_indirect_call(asm_fn, asm, &[], "")
+      //     .unwrap();
+      // }
     }
 
     CheckedStatement::Expression(expr) => {

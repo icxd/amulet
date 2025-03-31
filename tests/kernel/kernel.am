@@ -1,43 +1,20 @@
-type MultibootELFSymbolTable = class {
-  let num: u32;
-  let size: u32;
-  let addr: u32;
-  let shndx: u32;
-};
+fn strlen(s: c_char*) -> usz {
+  mut i: usz = 0;
+  while s[i] != 0 {
+    i += 1usz;
+  }
+  return i;
+}
 
-type MultibootInfo = class {
-  let flags: u32;
-  let mem_lower: u32;
-  let mem_upper: u32;
-  let boot_device: u32;
-  let cmdline: u32;
-  let mods_count: u32;
-  let mods_addr: u32;
-  let syms: MultibootELFSymbolTable;
-  let mmap_length: u32;
-  let mmap_addr: u32;
-  let drives_length: u32;
-  let drives_addr: u32;
-  let config_table: u32;
-  let boot_loader_name: u32;
-  let apm_table: u32;
-  let vbe_control_info: u32;
-  let vbe_mode_info: u32;
-  let vbe_mode: u16;
-  let vbe_interface_seg: u16;
-  let vbe_interface_off: u16;
-  let vbe_interface_len: u16;
-};
-
-fn kmain(magic: u32, mboot_info: MultibootInfo*) callconv(C) {
+fn kmain() callconv(C) {
   mut video_buffer = 0xb8000 as u8*;
-  let text = c"Hello, world!";
+  let text = c"Hello, world!\n";
 
-  mut i = 0 as usz;
-  while text[i] != 0 as c_char {
+  mut i: usz = 0;
+  while i < strlen(text) {
     video_buffer[i * 2] = text[i] as u8;
-    video_buffer[i * 2 + 1] = 0x0f;
-    i += 1 as usz;
+    video_buffer[i * 2 + 1] = 0x07;
+    i += 1usz;
   }
 
   loop {}

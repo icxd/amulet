@@ -1,7 +1,10 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use crate::{
   ast::{
+    inline_asm::{self, RegisterType},
     BinaryOperator, DefinitionLinkage, IntegerConstant, NumericConstant, ParsedBlock, ParsedCall,
     ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
     ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
@@ -77,6 +80,18 @@ pub struct CheckedTypeDecl {
   pub(crate) kind: CheckedTypeKind,
   pub(crate) linkage: DefinitionLinkage,
   pub(crate) scope_id: ScopeId,
+}
+impl CheckedTypeDecl {
+  fn implements(&self, lhs_struct_id: TypeDeclId) -> bool {
+    if let CheckedTypeKind::Class(ref class) = self.kind {
+      for interface in &class.implements {
+        if *interface == lhs_struct_id {
+          return true;
+        }
+      }
+    }
+    false
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +248,25 @@ impl CheckedExpression {
 }
 
 #[derive(Debug, Clone)]
+pub enum CheckedInlineAsmRegisterType {
+  None,
+  In,
+  Out(TypeId),
+}
+
+#[derive(Debug, Clone)]
+pub enum CheckedInlineAsmParameter {
+  Register(CheckedInlineAsmRegisterType, String),
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckedInlineAsmBinding {
+  pub(crate) var: CheckedExpression,
+  pub(crate) parameter: CheckedInlineAsmParameter,
+  pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum CheckedStatement {
   VarDecl(CheckedVarDecl, CheckedExpression),
 
@@ -252,7 +286,11 @@ pub enum CheckedStatement {
   Continue(Span),
   Return(CheckedExpression),
 
-  InlineAsm(Vec<String>, Span),
+  InlineAsm {
+    asm: Vec<String>,
+    bindings: Vec<CheckedInlineAsmBinding>,
+    clobbers: Vec<CheckedInlineAsmParameter>,
+  },
 
   Expression(CheckedExpression),
 }
@@ -272,7 +310,7 @@ impl CheckedBlock {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CheckedType {
   Builtin(Span),
   TypeVariable(String, Option<TypeId>, Span),
@@ -329,6 +367,7 @@ pub struct CheckedInterface {
 pub struct CheckedClass {
   pub(crate) implements: Vec<TypeId>,
   pub(crate) fields: Vec<CheckedVarDecl>,
+  pub(crate) methods: Vec<FunctionId>,
 }
 
 #[derive(Debug, Clone)]
@@ -636,6 +675,51 @@ impl Project {
   pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
     self.diagnostics.push(diagnostic);
   }
+
+  pub fn is_interface(&self, type_decl_id: TypeDeclId) -> bool {
+    if let CheckedTypeKind::Interface(_) = self.type_decls[type_decl_id].kind {
+      return true;
+    }
+    false
+  }
+
+  pub fn is_class(&self, type_decl_id: TypeDeclId) -> bool {
+    if let CheckedTypeKind::Class(_) = self.type_decls[type_decl_id].kind {
+      return true;
+    }
+    false
+  }
+}
+
+fn mangle_name(
+  resolved_namespaces: &[ResolvedNamespace],
+  name: &String,
+  type_args: &[TypeId],
+  project: &mut Project,
+) -> String {
+  let mut mangled_name = "_".to_string();
+
+  for namespace in resolved_namespaces.iter() {
+    let namespace_name = namespace.name.clone();
+    let namespace_name_len = namespace_name.len();
+    mangled_name.push('N');
+    mangled_name.push_str(&namespace_name_len.to_string());
+    mangled_name.push_str(&namespace_name);
+  }
+
+  mangled_name.push_str(&name.len().to_string());
+  mangled_name.push_str(name);
+
+  if !type_args.is_empty() {
+    for type_arg in type_args.iter() {
+      let type_name = project.typename_for_type_id(*type_arg);
+      let type_name_len = type_name.len();
+      mangled_name.push_str(&type_name_len.to_string());
+      mangled_name.push_str(&type_name);
+    }
+  }
+
+  mangled_name
 }
 
 pub fn typecheck_namespace(
@@ -813,7 +897,12 @@ fn typecheck_type_decl_predecl(
         linkage: type_decl.linkage,
       });
     }
-    ParsedTypeDeclData::Class { methods, .. } => {
+    ParsedTypeDeclData::Class {
+      implements,
+      methods,
+      ..
+    } => {
+      let mut checked_methods = vec![];
       for method in methods.iter() {
         let mut type_params = vec![];
         let method_scope_id = project.create_scope(type_decl_scope_id);
@@ -875,7 +964,8 @@ fn typecheck_type_decl_predecl(
           }
         }
 
-        project.functions.push(checked_function);
+        project.functions.push(checked_function.clone());
+        checked_methods.push(project.functions.len() - 1);
         project.add_function_to_scope(
           type_decl_scope_id,
           method.name.clone(),
@@ -884,12 +974,41 @@ fn typecheck_type_decl_predecl(
         );
       }
 
+      let mut checked_implements = vec![];
+      for interface in implements {
+        let interface_type_id = typecheck_typename(interface, type_decl_scope_id, project);
+        if interface_type_id == UNKNOWN_TYPE_ID {
+          continue;
+        }
+
+        let interface_type = &project.types[interface_type_id];
+        let CheckedType::TypeDecl(interface_id, span) = interface_type else {
+          project.add_diagnostic(Diagnostic::error(
+            interface_type.span(),
+            "unknown type declaration".into(),
+          ));
+          continue;
+        };
+
+        let checked_type_decl = &project.type_decls[*interface_id];
+        let CheckedTypeKind::Interface(_) = checked_type_decl.kind else {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("unknown interface {}", checked_type_decl.name),
+          ));
+          continue;
+        };
+
+        checked_implements.push(*interface_id);
+      }
+
       project.type_decls.push(CheckedTypeDecl {
         name: type_decl.name.clone(),
         generic_parameters: type_params,
         kind: CheckedTypeKind::Class(CheckedClass {
-          implements: vec![],
+          implements: checked_implements,
           fields: vec![],
+          methods: checked_methods,
         }),
         scope_id: type_decl_scope_id,
         linkage: type_decl.linkage,
@@ -930,8 +1049,10 @@ fn typecheck_type_decl(
 
   match &type_decl.data {
     ParsedTypeDeclData::Interface(_) => {}
-    ParsedTypeDeclData::Class { fields, .. } => {
-      for (unchecked_member, unchecked_value) in fields {
+    ParsedTypeDeclData::Class {
+      implements, fields, ..
+    } => {
+      for (unchecked_member, _unchecked_value) in fields {
         let checked_member_type =
           typecheck_typename(&unchecked_member.ty, type_decl_scope_id, project);
 
@@ -994,6 +1115,171 @@ fn typecheck_type_decl(
         .as_class_mut()
         .expect("internal error: got something other than a class while typechecking classes ()")
         .fields = checked_fields;
+      let checked_method_ids = checked_type_decl
+        .kind
+        .as_class_mut()
+        .unwrap()
+        .methods
+        .clone();
+
+      let functions = project.functions.clone();
+      let mut checked_methods = vec![];
+      for method_id in checked_method_ids {
+        let method = &functions[method_id];
+        checked_methods.push(method);
+      }
+
+      for interface in implements {
+        let interface_type_id = typecheck_typename(interface, type_decl_scope_id, project);
+        if interface_type_id == UNKNOWN_TYPE_ID {
+          continue;
+        }
+
+        let interface_type = &project.types[interface_type_id];
+        let CheckedType::TypeDecl(interface_id, span) = interface_type else {
+          project.add_diagnostic(Diagnostic::error(
+            interface_type.span(),
+            "unknown type declaration".into(),
+          ));
+          continue;
+        };
+
+        let checked_type_decl = &project.type_decls[*interface_id];
+        let CheckedTypeKind::Interface(ref interface) = checked_type_decl.kind else {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("unknown interface {}", checked_type_decl.name),
+          ));
+          continue;
+        };
+
+        let interface = interface.clone();
+
+        let mut found_methods = vec![];
+        for interface_method in interface.methods.iter() {
+          let mut method_found = false;
+          for class_method in checked_methods.iter() {
+            if interface_method.name == class_method.name {
+              // Check if the return types match
+              if interface_method.return_type_id != class_method.return_type_id {
+                project.add_diagnostic(
+                  Diagnostic::error(class_method.name_span, format!("mismatched return type"))
+                    .with_hint(
+                      interface_method.name_span,
+                      format!(
+                        "expected `{}`, found `{}`",
+                        project.typename_for_type_id(interface_method.return_type_id),
+                        project.typename_for_type_id(class_method.return_type_id),
+                      ),
+                    ),
+                );
+              }
+
+              if interface_method.is_mutating() && !class_method.is_mutating() {
+                project.add_diagnostic(
+                  Diagnostic::error(
+                    class_method.name_span,
+                    format!("method {} is not mutating", class_method.name),
+                  )
+                  .with_hint(
+                    interface_method.name_span,
+                    format!("expected mutating method"),
+                  ),
+                );
+              }
+              if !interface_method.is_mutating() && class_method.is_mutating() {
+                project.add_diagnostic(
+                  Diagnostic::error(
+                    class_method.name_span,
+                    format!("method {} is mutating", class_method.name),
+                  )
+                  .with_hint(
+                    interface_method.name_span,
+                    format!("expected non-mutating method"),
+                  ),
+                );
+              }
+
+              if interface_method.visibility != class_method.visibility {
+                project.add_diagnostic(
+                  Diagnostic::error(class_method.name_span, format!("mismatched visibility"))
+                    .with_hint(
+                      interface_method.name_span,
+                      format!(
+                        "expected visibility {}",
+                        match interface_method.visibility {
+                          Visibility::Public => "public",
+                          Visibility::Private => "private",
+                          Visibility::Protected => "protected",
+                        }
+                      ),
+                    ),
+                );
+              }
+
+              // Check if the parameter types match
+              if interface_method.params.len() != class_method.params.len() {
+                project.add_diagnostic(
+                  Diagnostic::error(
+                    class_method.name_span,
+                    "mismatched number of parameters".into(),
+                  )
+                  .with_hint(
+                    interface_method.name_span,
+                    format!("expected {} parameters", interface_method.params.len()),
+                  ),
+                );
+              } else {
+                for (interface_param, class_param) in interface_method
+                  .params
+                  .iter()
+                  .zip(class_method.params.iter())
+                {
+                  if interface_param.type_id != class_param.type_id {
+                    project.add_diagnostic(
+                      Diagnostic::error(
+                        class_param.span,
+                        format!(
+                          "incorrect parameter type for parameter {}",
+                          class_method.name,
+                        ),
+                      )
+                      .with_hint(
+                        interface_param.span,
+                        format!(
+                          "expected `{}`, found `{}`",
+                          project.typename_for_type_id(interface_param.type_id),
+                          project.typename_for_type_id(class_param.type_id),
+                        ),
+                      ),
+                    );
+                  }
+                }
+              }
+
+              method_found = true;
+              break;
+            }
+          }
+          if !method_found {
+            found_methods.push(interface_method);
+          }
+        }
+
+        if !found_methods.is_empty() {
+          let mut diagnostic = Diagnostic::error(
+            type_decl.name_span,
+            "class does not implement all methods".into(),
+          );
+          for method in found_methods {
+            diagnostic.with_hint(
+              method.name_span,
+              format!("missing method `{}`", method.name),
+            );
+          }
+          project.add_diagnostic(diagnostic);
+        }
+      }
 
       let ParsedTypeDeclData::Class { methods, .. } = &type_decl.data else {
         panic!("internal error: get something other than a class while typechecking class methods");
@@ -1142,7 +1428,7 @@ fn typecheck_function(function: &ParsedFunction, parent_scope_id: ScopeId, proje
   let mut checked_attributes = vec![];
   for attribute in function.attributes.iter() {
     match attribute {
-      ParsedFunctionAttribute::CallConv(call_conv, span) => {
+      ParsedFunctionAttribute::CallConv(call_conv, _) => {
         let cc = match call_conv.to_lowercase().as_str() {
           "c" => CallingConvention::C,
           "fastcall" => CallingConvention::FastCall,
@@ -1213,7 +1499,6 @@ fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_
   }
 
   let checked_function = &mut project.functions[method_id];
-
   checked_function.block = block;
   checked_function.return_type_id = return_type_id;
 }
@@ -1246,16 +1531,36 @@ fn typecheck_block(block: &ParsedBlock, scope_id: ScopeId, project: &mut Project
   checked_block
 }
 
+fn typecheck_inline_asm_parameter(
+  param: &inline_asm::Parameter,
+  scope_id: ScopeId,
+  project: &mut Project,
+) -> CheckedInlineAsmParameter {
+  match param {
+    inline_asm::Parameter::Register(ty, reg, span) => CheckedInlineAsmParameter::Register(
+      match ty {
+        inline_asm::RegisterType::None => CheckedInlineAsmRegisterType::None,
+        inline_asm::RegisterType::In => CheckedInlineAsmRegisterType::In,
+        inline_asm::RegisterType::Out(ty) => {
+          let type_id = typecheck_typename(ty, scope_id, project);
+          CheckedInlineAsmRegisterType::Out(type_id)
+        }
+      },
+      reg.clone(),
+    ),
+  }
+}
+
 fn typecheck_statement(
   stmt: &ParsedStatement,
   scope_id: ScopeId,
   project: &mut Project,
 ) -> CheckedStatement {
   match stmt {
-    ParsedStatement::VarDecl(var_decl, expr, span) => {
+    ParsedStatement::VarDecl(var_decl, expr, _span) => {
       let mut checked_type_id = typecheck_typename(&var_decl.ty, scope_id, project);
       let checked_expr = typecheck_expression(expr, scope_id, Some(checked_type_id), project);
-      if checked_type_id == UNKNOWN_TYPE_ID && checked_expr.type_id(project) != UNKNOWN_TYPE_ID {
+      if checked_type_id == UNKNOWN_TYPE_ID {
         checked_type_id = checked_expr.type_id(project);
       }
 
@@ -1266,16 +1571,7 @@ fn typecheck_statement(
         span: var_decl.span,
       };
 
-      project.add_var_to_scope(
-        scope_id,
-        CheckedVarDecl {
-          name: checked_var_decl.name.clone(),
-          type_id: checked_var_decl.type_id,
-          mutable: checked_var_decl.mutable,
-          span: checked_var_decl.span,
-        },
-        checked_var_decl.span,
-      );
+      project.add_var_to_scope(scope_id, checked_var_decl.clone(), checked_var_decl.span);
 
       CheckedStatement::VarDecl(checked_var_decl, checked_expr)
     }
@@ -1285,14 +1581,14 @@ fn typecheck_statement(
       CheckedStatement::Block(block)
     }
 
-    ParsedStatement::If(condition, then_block, else_block, span) => {
+    ParsedStatement::If(condition, then_block, else_block, _span) => {
       let condition = typecheck_expression(condition, scope_id, None, project);
 
       let then_block = typecheck_block(then_block, scope_id, project);
 
-      let checked_else_block = None;
+      let mut checked_else_block = None;
       if let Some(else_block) = else_block {
-        let checked_else_block = Some(typecheck_block(else_block, scope_id, project));
+        checked_else_block = Some(typecheck_block(else_block, scope_id, project));
       }
 
       CheckedStatement::If {
@@ -1302,7 +1598,7 @@ fn typecheck_statement(
       }
     }
 
-    ParsedStatement::While(condition, block, span) => {
+    ParsedStatement::While(condition, block, _span) => {
       let condition = typecheck_expression(condition, scope_id, None, project);
 
       let block = typecheck_block(block, scope_id, project);
@@ -1315,13 +1611,52 @@ fn typecheck_statement(
       CheckedStatement::Loop(block)
     }
 
-    ParsedStatement::InlineAsm(asm, span) => CheckedStatement::InlineAsm(asm.to_vec(), *span),
+    ParsedStatement::InlineAsm {
+      asm,
+      bindings,
+      clobbers,
+    } => {
+      let mut checked_bindings = vec![];
+      for binding in bindings {
+        let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
+        let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
+
+        if let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = checked_param {
+          if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
+            if checked_expr.type_id(project) != *type_id {
+              project.add_diagnostic(Diagnostic::error(
+                binding.var.span(),
+                "mismatched type for inline asm binding".into(),
+              ));
+            }
+          }
+        }
+
+        checked_bindings.push(CheckedInlineAsmBinding {
+          var: checked_expr,
+          parameter: checked_param,
+          span: binding.var.span(),
+        });
+      }
+
+      let mut checked_clobbers = vec![];
+      for clobber in clobbers {
+        let checked_clobber = typecheck_inline_asm_parameter(clobber, scope_id, project);
+        checked_clobbers.push(checked_clobber);
+      }
+
+      CheckedStatement::InlineAsm {
+        asm: asm.clone(),
+        bindings: checked_bindings,
+        clobbers: checked_clobbers,
+      }
+    }
 
     ParsedStatement::Break(span) => CheckedStatement::Break(*span),
 
     ParsedStatement::Continue(span) => CheckedStatement::Continue(*span),
 
-    ParsedStatement::Return(expr, span) => {
+    ParsedStatement::Return(expr, _span) => {
       let expr = typecheck_expression(
         expr,
         scope_id,
@@ -1444,7 +1779,7 @@ fn typecheck_call(
     project,
   );
 
-  if let Some(callee) = callee {
+  if let Some(ref callee) = callee {
     let callee = callee.clone();
 
     if callee.visibility != Visibility::Public
@@ -1483,7 +1818,7 @@ fn typecheck_call(
       let type_id = this_expr.type_id(project);
       let param_type = &project.types[type_id];
 
-      if let CheckedType::GenericInstance(type_decl_id, args, span) = param_type {
+      if let CheckedType::GenericInstance(type_decl_id, args, _span) = param_type {
         let type_decl = &project.type_decls[*type_decl_id];
 
         let mut idx = 0;
@@ -1555,8 +1890,8 @@ fn typecheck_call(
     if let Some(type_hint_id) = type_hint {
       if type_hint_id != UNKNOWN_TYPE_ID {
         check_types_for_compat(
-          return_type_id,
           type_hint_id,
+          return_type_id,
           &mut generic_substitutions,
           *span,
           project,
@@ -1655,13 +1990,16 @@ fn typecheck_expression(
       }
 
       let mut inferences = HashMap::new();
-      check_types_for_compat(
+      let x = check_types_for_compat(
         type_hint_id,
         *type_id,
         &mut inferences,
         expr.span(),
         project,
       );
+      if x.is_none() {
+        return *type_id;
+      }
 
       return substitute_typevars_in_type(*type_id, &inferences, project);
     }
@@ -1684,7 +2022,8 @@ fn typecheck_expression(
     }
 
     ParsedExpression::NumericConstant(constant, span) => {
-      let type_id = unify_with_type_hint(project, &constant.type_id());
+      // let type_id = unify_with_type_hint(project, &constant.type_id());
+      let type_id = constant.type_id();
       CheckedExpression::NumericConstant(constant.clone(), type_id, *span)
     }
 
@@ -1852,12 +2191,9 @@ fn typecheck_expression(
     ParsedExpression::IndexedStruct(expr, name, span) => {
       let checked_expr = typecheck_expression(expr, scope_id, None, project);
 
-      let type_id = UNKNOWN_TYPE_ID;
-
       let checked_expr_type_id = checked_expr.type_id(project);
       let checked_expr_type = &project.types[checked_expr_type_id];
       match checked_expr_type {
-        /* Type::GenericInstance(struct_id, _) |  */
         CheckedType::TypeDecl(type_decl_id, _) => {
           let type_decl = &project.type_decls[*type_decl_id];
           let CheckedTypeKind::Class(class) = &type_decl.kind else {
@@ -1907,12 +2243,13 @@ fn typecheck_unary_operation(
   span: Span,
   project: &mut Project,
 ) -> CheckedExpression {
+  let types = &project.types.clone();
   let expr_type_id = expr.type_id(project);
-  let expr_type = &project.types[expr_type_id];
+  let expr_type = &types[expr_type_id];
 
   match op {
     CheckedUnaryOperator::As(type_id) => {
-      let cast_type = &project.types[type_id];
+      let cast_type = &types[type_id];
       match (expr_type, cast_type) {
         (CheckedType::Builtin(_), CheckedType::Builtin(_))
           if is_integer(expr_type_id) && is_integer(type_id) => {}
@@ -1928,6 +2265,34 @@ fn typecheck_unary_operation(
                 project.typename_for_type_id(type_id),
               ),
             ));
+          }
+        }
+
+        (
+          CheckedType::TypeDecl(lhs_type_decl_id, _),
+          CheckedType::TypeDecl(rhs_type_decl_id, _),
+        ) => {
+          if !project.is_class(*lhs_type_decl_id) && !project.is_interface(*rhs_type_decl_id) {
+            project.add_diagnostic(Diagnostic::error(
+              span,
+              format!(
+                "cannot cast {} to {}",
+                project.typename_for_type_id(expr_type_id),
+                project.typename_for_type_id(type_id),
+              ),
+            ));
+          } else {
+            let lhs_type_decl = &project.type_decls[*lhs_type_decl_id];
+            if !lhs_type_decl.implements(*rhs_type_decl_id) {
+              project.add_diagnostic(Diagnostic::error(
+                span,
+                format!(
+                  "cannot cast {} to {}",
+                  project.typename_for_type_id(expr_type_id),
+                  project.typename_for_type_id(type_id),
+                ),
+              ));
+            }
           }
         }
 
@@ -2135,7 +2500,7 @@ pub fn check_types_for_compat(
   specializations: &mut HashMap<TypeId, TypeId>,
   span: Span,
   project: &mut Project,
-) {
+) -> Option<()> {
   let lhs_type = &project.types[lhs_type_id];
 
   let optional_type_decl_id = project
@@ -2146,7 +2511,7 @@ pub fn check_types_for_compat(
     if *lhs_type_decl_id == optional_type_decl_id
       && args.first().map_or(false, |arg_id| *arg_id == rhs_type_id)
     {
-      return;
+      return Some(());
     }
   }
 
@@ -2162,6 +2527,7 @@ pub fn check_types_for_compat(
               project.typename_for_type_id(rhs_type_id),
             ),
           ));
+          return None;
         }
       } else {
         specializations.insert(lhs_type_id, rhs_type_id);
@@ -2184,6 +2550,7 @@ pub fn check_types_for_compat(
                   lhs_struct.name
                 ),
               ));
+              return None;
             }
 
             let mut idx = 0;
@@ -2191,14 +2558,13 @@ pub fn check_types_for_compat(
             while idx < lhs_args.len() {
               let lhs_arg_type_id = lhs_args[idx];
               let rhs_arg_type_id = rhs_args[idx];
-
               check_types_for_compat(
                 lhs_arg_type_id,
                 rhs_arg_type_id,
                 specializations,
                 span,
                 project,
-              );
+              )?;
               idx += 1;
             }
           }
@@ -2213,13 +2579,14 @@ pub fn check_types_for_compat(
                 project.typename_for_type_id(rhs_type_id),
               ),
             ));
+            return None;
           }
         }
       }
     }
     CheckedType::TypeDecl(lhs_type_decl_id, _) => {
       if rhs_type_id == lhs_type_id {
-        return;
+        return Some(());
       }
 
       let rhs_type = &project.types[rhs_type_id];
@@ -2237,6 +2604,7 @@ pub fn check_types_for_compat(
                   lhs_struct.name
                 ),
               ));
+              return None;
             }
 
             let mut idx = 0;
@@ -2251,11 +2619,29 @@ pub fn check_types_for_compat(
                 specializations,
                 span,
                 project,
-              );
+              )?;
               idx += 1;
             }
           }
         }
+
+        CheckedType::TypeDecl(rhs_type_decl_id, _) if project.is_interface(*lhs_type_decl_id) => {
+          if !project.is_interface(*rhs_type_decl_id) {
+            let rhs_struct = &project.type_decls[*rhs_type_decl_id];
+            if !rhs_struct.implements(*lhs_type_decl_id) {
+              project.add_diagnostic(Diagnostic::error(
+                span,
+                format!(
+                  "type mismatch: expected {}, but got {}",
+                  project.typename_for_type_id(lhs_type_id),
+                  project.typename_for_type_id(rhs_type_id),
+                ),
+              ));
+              return None;
+            }
+          }
+        }
+
         _ => {
           if rhs_type_id != lhs_type_id {
             project.add_diagnostic(Diagnostic::error(
@@ -2266,6 +2652,7 @@ pub fn check_types_for_compat(
                 project.typename_for_type_id(rhs_type_id),
               ),
             ));
+            return None;
           }
         }
       }
@@ -2280,9 +2667,12 @@ pub fn check_types_for_compat(
             project.typename_for_type_id(rhs_type_id),
           ),
         ));
+        return None;
       }
     }
   }
+
+  Some(())
 }
 
 pub fn typecheck_typename(

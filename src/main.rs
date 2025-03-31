@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::{
   builder::{OsStr, PossibleValue},
@@ -92,7 +92,7 @@ impl Into<inkwell::OptimizationLevel> for OptLevel {
   }
 }
 
-fn main() {
+fn main() -> ExitCode {
   env_logger::init();
   let opts = Opts::parse();
 
@@ -104,7 +104,7 @@ fn main() {
         for error in errors {
           println!("{}", serde_json::to_string(&error).unwrap());
         }
-        continue;
+        return ExitCode::FAILURE;
       }
       if opts.print_symbols {
         println!("[]");
@@ -114,6 +114,10 @@ fn main() {
       for error in errors {
         display_error(&error, source.as_str(), path.as_str());
       }
+
+      return ExitCode::FAILURE;
     };
   }
+
+  ExitCode::SUCCESS
 }

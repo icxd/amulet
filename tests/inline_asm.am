@@ -1,13 +1,14 @@
+fn syscall1(number: usz, arg1: usz) -> usz {
+  mut ret = 0usz;
+  asm {
+    "syscall\n"
+    bind(ret: reg(rax out -> usz))
+    bind(number: reg(rax in))
+    bind(arg1: reg(rdi in))
+    clobber [reg(rcx), reg(r11)]
+  }
+  return ret;
+}
 
 fn main() {
-  asm {
-    "cpuid",
-    inputs = [level: register(eax)],
-    outputs = [
-      eax_out: register(eax) => out,
-      ebx_out: register(ebx) => out,
-      ecx_out: register(ecx) => out,
-      edx_out: register(edx) => out
-    ]
-  }
 }
