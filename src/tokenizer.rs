@@ -375,7 +375,31 @@ impl Tokenizer {
           self.pos += 1;
           let start = self.pos;
           while self.pos < self.source.len() && self.source.chars().nth(self.pos).unwrap() != '"' {
-            self.pos += 1;
+            let ch = self.source.chars().nth(self.pos).unwrap();
+            if ch == '\\' {
+              self.pos += 1;
+              match self.source.chars().nth(self.pos).unwrap() {
+                'n' => self.pos += 1,
+                't' => self.pos += 1,
+                'r' => self.pos += 1,
+                'b' => self.pos += 1,
+                'f' => self.pos += 1,
+                '\\' => self.pos += 1,
+                '"' => self.pos += 1,
+                '\'' => self.pos += 1,
+                _ => {
+                  return Err(Diagnostic::error(
+                    Span::new(self.file_id, start, self.pos),
+                    format!(
+                      "invalid escape sequence '\\{}'",
+                      self.source.chars().nth(self.pos).unwrap()
+                    ),
+                  ));
+                }
+              }
+            } else {
+              self.pos += 1;
+            }
           }
           let end = self.pos;
           let literal = self.source[start..end].to_string();
