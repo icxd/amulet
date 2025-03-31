@@ -45,6 +45,7 @@ pub enum TokenKind {
   KwTodo,
   KwType,
   KwUnreachable, 
+  KwVolatile,
   KwWhile,
   
   OpenParen, CloseParen,
@@ -107,6 +108,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::KwTodo => "todo",
         TokenKind::KwType => "type",
         TokenKind::KwUnreachable => "unreachable",
+        TokenKind::KwVolatile => "volatile",
         TokenKind::KwWhile => "while",
         TokenKind::OpenParen => "(",
         TokenKind::CloseParen => ")",
@@ -267,6 +269,7 @@ impl Tokenizer {
               "todo" => TokenKind::KwTodo,
               "type" => TokenKind::KwType,
               "unreachable" => TokenKind::KwUnreachable,
+              "volatile" => TokenKind::KwVolatile,
               "while" => TokenKind::KwWhile,
               _ => TokenKind::Identifier,
             },
