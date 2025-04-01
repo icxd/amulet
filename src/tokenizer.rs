@@ -777,7 +777,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 2;
+            self.pos += 1;
 
             Some(NumericSuffix::U8)
           }
@@ -837,7 +837,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 2;
+            self.pos += 1;
 
             Some(NumericSuffix::I8)
           }
