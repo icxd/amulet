@@ -193,6 +193,16 @@ pub enum CheckedExpression {
 
   Call(CheckedCall, TypeId, Span),
   MethodCall(Box<CheckedExpression>, CheckedCall, TypeId, Span),
+
+  InlineAsm {
+    volatile: bool,
+    asm: Vec<String>,
+    bindings: Vec<CheckedInlineAsmBinding>,
+    clobbers: Vec<CheckedInlineAsmParameter>,
+    type_id: TypeId,
+    span: Span,
+  },
+
   Garbage(Span),
 }
 impl CheckedExpression {
@@ -215,6 +225,7 @@ impl CheckedExpression {
       CheckedExpression::IndexedStruct(_, _, _, type_id, _) => *type_id,
       CheckedExpression::Call(_, type_id, _) => *type_id,
       CheckedExpression::MethodCall(_, _, type_id, _) => *type_id,
+      CheckedExpression::InlineAsm { type_id, .. } => *type_id,
       CheckedExpression::Garbage(_) => UNKNOWN_TYPE_ID,
     }
   }
@@ -284,13 +295,6 @@ pub enum CheckedStatement {
   Break(Span),
   Continue(Span),
   Return(CheckedExpression),
-
-  InlineAsm {
-    volatile: bool,
-    asm: Vec<String>,
-    bindings: Vec<CheckedInlineAsmBinding>,
-    clobbers: Vec<CheckedInlineAsmParameter>,
-  },
 
   Expression(CheckedExpression),
 }
@@ -1611,50 +1615,6 @@ fn typecheck_statement(
       CheckedStatement::Loop(block)
     }
 
-    ParsedStatement::InlineAsm {
-      volatile,
-      asm,
-      bindings,
-      clobbers,
-    } => {
-      let mut checked_bindings = vec![];
-      for binding in bindings {
-        let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
-        let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
-
-        #[allow(irrefutable_let_patterns)]
-        if let CheckedInlineAsmParameter::Register(ref reg_type, _) = checked_param {
-          if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
-            if checked_expr.type_id(project) != *type_id {
-              project.add_diagnostic(Diagnostic::error(
-                binding.var.span(),
-                "mismatched type for inline asm binding".into(),
-              ));
-            }
-          }
-        }
-
-        checked_bindings.push(CheckedInlineAsmBinding {
-          var: checked_expr,
-          parameter: checked_param,
-          span: binding.var.span(),
-        });
-      }
-
-      let mut checked_clobbers = vec![];
-      for clobber in clobbers {
-        let checked_clobber = typecheck_inline_asm_parameter(clobber, scope_id, project);
-        checked_clobbers.push(checked_clobber);
-      }
-
-      CheckedStatement::InlineAsm {
-        volatile: *volatile,
-        asm: asm.clone(),
-        bindings: checked_bindings,
-        clobbers: checked_clobbers,
-      }
-    }
-
     ParsedStatement::Break(span) => CheckedStatement::Break(*span),
 
     ParsedStatement::Continue(span) => CheckedStatement::Continue(*span),
@@ -2234,6 +2194,70 @@ fn typecheck_expression(
       }
 
       CheckedExpression::Garbage(*span)
+    }
+
+    ParsedExpression::InlineAsm {
+      volatile,
+      asm,
+      bindings,
+      clobbers,
+      span,
+    } => {
+      let mut type_ids = vec![];
+      let mut checked_bindings = vec![];
+      for binding in bindings {
+        let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
+        let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
+
+        #[allow(irrefutable_let_patterns)]
+        if let CheckedInlineAsmParameter::Register(ref reg_type, _) = checked_param {
+          if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
+            if checked_expr.type_id(project) != *type_id {
+              project.add_diagnostic(Diagnostic::error(
+                binding.var.span(),
+                "mismatched type for inline asm binding".into(),
+              ));
+            }
+
+            type_ids.push(*type_id);
+          }
+        }
+
+        checked_bindings.push(CheckedInlineAsmBinding {
+          var: checked_expr,
+          parameter: checked_param,
+          span: binding.var.span(),
+        });
+      }
+
+      let mut checked_clobbers = vec![];
+      for clobber in clobbers {
+        let checked_clobber = typecheck_inline_asm_parameter(clobber, scope_id, project);
+        checked_clobbers.push(checked_clobber);
+      }
+
+      let mut type_id = UNKNOWN_TYPE_ID;
+      if type_ids.len() == 1 {
+        type_id = type_ids[0];
+      } else if type_ids.len() > 1 {
+        project.add_diagnostic(Diagnostic::error(
+          *span,
+          "inline asm has multiple return types".into(),
+        ));
+      }
+
+      if type_id == UNKNOWN_TYPE_ID {
+        type_id = unify_with_type_hint(project, &type_id);
+      }
+
+      CheckedExpression::InlineAsm {
+        volatile: *volatile,
+        asm: asm.clone(),
+        bindings: checked_bindings,
+        clobbers: checked_clobbers,
+        type_id,
+        span: *span,
+      }
     }
 
     _ => todo!("typecheck_expression: {:?}", expr),

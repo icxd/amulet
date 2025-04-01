@@ -442,8 +442,6 @@ impl Parser {
         Ok(ParsedStatement::Loop(body.clone(), span.join(&body.span)))
       }
 
-      TokenKind::KwAsm => Ok(self.parse_inline_asm()?),
-
       TokenKind::KwBreak => {
         let span = self.expect(TokenKind::KwBreak)?.span;
         self.expect(TokenKind::Semicolon)?;
@@ -516,9 +514,9 @@ impl Parser {
     }
   }
 
-  fn parse_inline_asm(&mut self) -> Result<ParsedStatement> {
+  fn parse_inline_asm(&mut self) -> Result<ParsedExpression> {
     trace!("parse_inline_asm: {:?}", self.current());
-    self.expect(TokenKind::KwAsm)?;
+    let asm_kw = self.expect(TokenKind::KwAsm)?;
 
     let volatile = if self.current().kind == TokenKind::KwVolatile {
       self.expect(TokenKind::KwVolatile)?;
@@ -568,13 +566,14 @@ impl Parser {
         self.expect(TokenKind::CloseBracket)?;
       }
     }
-    self.expect(TokenKind::CloseBrace)?;
+    let cb = self.expect(TokenKind::CloseBrace)?;
 
-    Ok(ParsedStatement::InlineAsm {
+    Ok(ParsedExpression::InlineAsm {
       volatile,
       asm,
       bindings,
       clobbers,
+      span: asm_kw.span.join(&cb.span),
     })
   }
 
@@ -762,6 +761,7 @@ impl Parser {
           ParsedExpression::Var(name, span)
         }
       }
+      TokenKind::KwAsm => self.parse_inline_asm()?,
       TokenKind::KwTodo => {
         self.pos += 1;
         ParsedExpression::Todo(span)

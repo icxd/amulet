@@ -8,8 +8,10 @@ use inkwell::{
   llvm_sys::core::{LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed, LLVMStructSetBody},
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
-  types::{AsTypeRef, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
+  types::{AsTypeRef, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, PointerType, StructType},
+  values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
+  },
   AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -442,86 +444,6 @@ fn compile_statement<'ctx>(
         .builder
         .build_return(Some(&value.unwrap()))
         .expect("internal error: failed to build return");
-    }
-
-    CheckedStatement::InlineAsm {
-      volatile,
-      asm,
-      bindings,
-      clobbers,
-    } => {
-      let (mut param_types, mut args) = (vec![], vec![]);
-      let mut constraints: String = "".into();
-
-      for binding in bindings {
-        #[allow(irrefutable_let_patterns)]
-        let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = binding.parameter
-        else {
-          unreachable!()
-        };
-
-        use CheckedInlineAsmRegisterType::*;
-        match reg_type {
-          None => unreachable!(),
-          In => {
-            let var = compile_expression(backend, project, &binding.var.clone()).unwrap();
-            let type_id = binding.var.type_id(project);
-            let compiled_type = compile_type(backend, project, type_id);
-
-            param_types.push(compiled_type.into());
-            args.push(var.into());
-            constraints.push_str(&format!("{{{}}},", reg));
-          }
-          Out(_type_id) => {
-            if let CheckedExpression::Variable(var, _) = &binding.var {
-              // let compiled_type = compile_type(backend, project, *type_id);
-              let ptr_type = backend.context.ptr_type(AddressSpace::default());
-
-              let var = var.name.clone();
-              let ptr = backend.variable_ptrs.borrow()[&var].clone();
-
-              param_types.push(ptr_type.into());
-              args.push(ptr.into());
-              constraints.push_str(&format!("={{{}}},", reg));
-            } else {
-              panic!();
-            }
-          }
-        }
-      }
-
-      for clobber in clobbers {
-        #[allow(irrefutable_let_patterns)]
-        let CheckedInlineAsmParameter::Register(reg_type, reg) = clobber
-        else {
-          unreachable!()
-        };
-
-        use CheckedInlineAsmRegisterType::*;
-        match reg_type {
-          None => constraints.push_str(&format!("~{{{}}},", reg)),
-          In => unreachable!(),
-          Out(_) => unreachable!(),
-        }
-      }
-
-      let asm_fn = backend
-        .context
-        .void_type()
-        .fn_type(param_types.as_slice(), false);
-      let asm = backend.context.create_inline_asm(
-        asm_fn,
-        asm.join("\n"),
-        constraints,
-        *volatile,
-        false,
-        None,
-        false,
-      );
-      backend
-        .builder
-        .build_indirect_call(asm_fn, asm, args.as_slice(), "")
-        .unwrap();
     }
 
     CheckedStatement::Expression(expr) => {
@@ -1220,6 +1142,129 @@ fn compile_expression<'ctx>(
         .build_extract_value(compiled_expr.into_struct_value(), idx as u32, "")
         .unwrap();
       Some(value)
+    }
+
+    CheckedExpression::InlineAsm {
+      volatile,
+      asm,
+      bindings,
+      clobbers,
+      type_id,
+      span,
+    } => {
+      let mut param_types: Vec<BasicMetadataTypeEnum<'_>> = vec![];
+      let mut args: Vec<BasicMetadataValueEnum<'_>> = vec![];
+      let mut return_types = vec![];
+      let mut constraints: String = "".into();
+
+      for binding in bindings {
+        #[allow(irrefutable_let_patterns)]
+        let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = binding.parameter
+        else {
+          unreachable!()
+        };
+
+        use CheckedInlineAsmRegisterType::*;
+        match reg_type {
+          None => unreachable!(),
+          In => {
+            let var = compile_expression(backend, project, &binding.var.clone()).unwrap();
+            let type_id = binding.var.type_id(project);
+            let compiled_type = compile_type(backend, project, type_id);
+
+            param_types.push(compiled_type.into());
+            args.push(var.into());
+            constraints.push_str(&format!("r{{{}}},", reg));
+          }
+          Out(type_id) => {
+            if let CheckedExpression::Variable(_var, _) = &binding.var {
+              let compiled_type = compile_type(backend, project, *type_id);
+
+              // let ptr_type = backend.context.ptr_type(AddressSpace::default());
+              // let var = var.name.clone();
+              // let ptr = backend.variable_ptrs.borrow()[&var].clone();
+              // param_types.push(ptr_type.into());
+              // args.push(ptr.into());
+
+              return_types.push(compiled_type);
+              constraints.push_str(&format!("=r{{{}}},", reg));
+            } else {
+              panic!();
+            }
+          }
+        }
+      }
+
+      for clobber in clobbers {
+        #[allow(irrefutable_let_patterns)]
+        let CheckedInlineAsmParameter::Register(reg_type, reg) = clobber
+        else {
+          unreachable!()
+        };
+
+        use CheckedInlineAsmRegisterType::*;
+        match reg_type {
+          None => constraints.push_str(&format!("~{{{}}},", reg)),
+          In => unreachable!(),
+          Out(_) => unreachable!(),
+        }
+      }
+
+      let return_type = if return_types.is_empty() {
+        backend.context.void_type().as_type_ref()
+      } else if return_types.len() == 1 {
+        return_types[0].as_type_ref()
+      } else {
+        backend
+          .context
+          .struct_type(&return_types, false)
+          .as_type_ref()
+      };
+
+      let asm_fn = unsafe {
+        LLVMFunctionType(
+          return_type,
+          param_types
+            .iter()
+            .map(|p| p.as_type_ref())
+            .collect::<Vec<_>>()
+            .as_mut_ptr(),
+          param_types.len() as u32,
+          false as i32,
+        )
+      };
+
+      let constraints = constraints.trim_end_matches(',').to_string();
+
+      let asm_fn = unsafe { FunctionType::new(asm_fn) };
+      let asm = backend.context.create_inline_asm(
+        asm_fn,
+        asm.join("\n"),
+        constraints,
+        *volatile,
+        false,
+        None,
+        false,
+      );
+      let value = backend
+        .builder
+        .build_indirect_call(asm_fn, asm, args.as_slice(), "")
+        .unwrap();
+
+      if return_types.is_empty() {
+        None
+      } else if return_types.len() == 1 {
+        let value = value.try_as_basic_value().left().unwrap();
+        Some(value)
+      } else {
+        let value = value
+          .try_as_basic_value()
+          .left()
+          .unwrap()
+          .into_struct_value();
+        let value = backend.builder.build_extract_value(value, 0, "").unwrap();
+        Some(value)
+      }
     }
 
     _ => todo!("compile_expression not implemented for {:?}", expr),

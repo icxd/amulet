@@ -366,13 +366,6 @@ pub enum ParsedStatement {
   While(ParsedExpression, ParsedBlock, Span),
   Loop(ParsedBlock, Span),
 
-  InlineAsm {
-    volatile: bool,
-    asm: Vec<String>,
-    bindings: Vec<inline_asm::Binding>,
-    clobbers: Vec<inline_asm::Parameter>,
-  },
-
   Break(Span),
   Continue(Span),
   Return(ParsedExpression, Span),
@@ -406,6 +399,14 @@ pub enum ParsedExpression {
   MethodCall(Box<ParsedExpression>, ParsedCall, Span),
 
   Operator(BinaryOperator, Span),
+
+  InlineAsm {
+    volatile: bool,
+    asm: Vec<String>,
+    bindings: Vec<inline_asm::Binding>,
+    clobbers: Vec<inline_asm::Parameter>,
+    span: Span,
+  },
 
   Todo(Span),
   Unreachable(Span),
@@ -469,6 +470,7 @@ impl ParsedExpression {
       ParsedExpression::Call(_, span) => *span,
       ParsedExpression::MethodCall(_, _, span) => *span,
       ParsedExpression::Operator(_, span) => *span,
+      ParsedExpression::InlineAsm { span, .. } => *span,
       ParsedExpression::Todo(span) => *span,
       ParsedExpression::Unreachable(span) => *span,
       ParsedExpression::Garbage(span) => *span,

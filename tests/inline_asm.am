@@ -1,13 +1,12 @@
 fn syscall1(number: usz, arg1: usz) -> usz {
   mut ret = 0usz;
-  asm volatile {
+  return asm volatile {
     "syscall"
     bind(ret: reg(rax out -> usz))
     bind(number: reg(rax in))
     bind(arg1: reg(rdi in))
     clobber [reg(rcx), reg(r11)]
-  }
-  return ret;
+  };
 }
 
 fn main() {
