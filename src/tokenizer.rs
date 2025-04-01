@@ -282,17 +282,41 @@ impl Tokenizer {
           self.pos += 1;
           let start = self.pos;
           while self.pos < self.source.len() && self.source.chars().nth(self.pos).unwrap() != '\'' {
+            match self.source.chars().nth(self.pos).unwrap() {
+              '\\' => {
+                self.pos += 1;
+                if self.pos >= self.source.len() {
+                  return Err(Diagnostic::error(
+                    Span::new(self.file_id, start, self.pos),
+                    "unexpected end of input".into(),
+                  ));
+                }
+                match self.source.chars().nth(self.pos).unwrap() {
+                  'n' | 't' | 'r' | 'b' | 'f' | '\\' | '\'' | '0' => {}
+                  _ => {
+                    return Err(Diagnostic::error(
+                      Span::new(self.file_id, start, self.pos),
+                      format!(
+                        "invalid escape sequence '\\{}'",
+                        self.source.chars().nth(self.pos).unwrap()
+                      ),
+                    ));
+                  }
+                }
+              }
+              _ => {}
+            }
             self.pos += 1;
           }
           let end = self.pos;
           let length = end - start;
-          if length != 1 {
+          let literal = self.source[start..end].to_string();
+          if literal.chars().nth(0).unwrap() != '\\' && length != 1 {
             return Err(Diagnostic::error(
               Span::new(self.file_id, start, end),
               "character literal must be a single character".into(),
             ));
           }
-          let literal = self.source[start..end].to_string();
           tokens.push(Token::new(
             TokenKind::Char,
             Span::new(self.file_id, start, end),
@@ -753,7 +777,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::U8)
           }
@@ -764,9 +788,12 @@ impl Tokenizer {
             self.pos += 1;
 
             match self.source.chars().nth(self.pos) {
-              Some('6') => Some(NumericSuffix::U16),
-              Some('2') => {
+              Some('6') => {
                 self.pos += 1;
+                Some(NumericSuffix::U16)
+              }
+              Some('2') => {
+                self.pos += 2;
                 Some(NumericSuffix::U128)
               }
               _ => return None,
@@ -776,7 +803,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::U32)
           }
@@ -784,7 +811,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::U64)
           }
@@ -810,7 +837,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::I8)
           }
@@ -821,9 +848,12 @@ impl Tokenizer {
             self.pos += 1;
 
             match self.source.chars().nth(self.pos) {
-              Some('6') => Some(NumericSuffix::I16),
-              Some('2') => {
+              Some('6') => {
                 self.pos += 1;
+                Some(NumericSuffix::I16)
+              }
+              Some('2') => {
+                self.pos += 2;
                 Some(NumericSuffix::I128)
               }
               _ => return None,
@@ -833,7 +863,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::I32)
           }
@@ -841,7 +871,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::I64)
           }
@@ -859,7 +889,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::F32)
           }
@@ -867,7 +897,7 @@ impl Tokenizer {
             if self.pos + 1 >= self.source.len() {
               return None;
             }
-            self.pos += 1;
+            self.pos += 2;
 
             Some(NumericSuffix::F64)
           }
