@@ -287,6 +287,7 @@ pub enum CheckedStatement {
   Return(CheckedExpression),
 
   InlineAsm {
+    volatile: bool,
     asm: Vec<String>,
     bindings: Vec<CheckedInlineAsmBinding>,
     clobbers: Vec<CheckedInlineAsmParameter>,
@@ -1612,6 +1613,7 @@ fn typecheck_statement(
     }
 
     ParsedStatement::InlineAsm {
+      volatile,
       asm,
       bindings,
       clobbers,
@@ -1646,6 +1648,7 @@ fn typecheck_statement(
       }
 
       CheckedStatement::InlineAsm {
+        volatile: *volatile,
         asm: asm.clone(),
         bindings: checked_bindings,
         clobbers: checked_clobbers,

@@ -520,6 +520,13 @@ impl Parser {
     trace!("parse_inline_asm: {:?}", self.current());
     self.expect(TokenKind::KwAsm)?;
 
+    let volatile = if self.current().kind == TokenKind::KwVolatile {
+      self.expect(TokenKind::KwVolatile)?;
+      true
+    } else {
+      false
+    };
+
     let mut asm = vec![];
     let mut bindings = vec![];
     let mut clobbers = vec![];
@@ -564,6 +571,7 @@ impl Parser {
     self.expect(TokenKind::CloseBrace)?;
 
     Ok(ParsedStatement::InlineAsm {
+      volatile,
       asm,
       bindings,
       clobbers,

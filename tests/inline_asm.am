@@ -1,7 +1,7 @@
 fn syscall1(number: usz, arg1: usz) -> usz {
   mut ret = 0usz;
-  asm {
-    "syscall\n"
+  asm volatile {
+    "syscall"
     bind(ret: reg(rax out -> usz))
     bind(number: reg(rax in))
     bind(arg1: reg(rdi in))

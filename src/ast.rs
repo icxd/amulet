@@ -367,6 +367,7 @@ pub enum ParsedStatement {
   Loop(ParsedBlock, Span),
 
   InlineAsm {
+    volatile: bool,
     asm: Vec<String>,
     bindings: Vec<inline_asm::Binding>,
     clobbers: Vec<inline_asm::Parameter>,
