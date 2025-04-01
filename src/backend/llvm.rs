@@ -376,9 +376,9 @@ fn compile_statement<'ctx>(
         .current_function
         .expect("internal error: no current function");
 
-      let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
-      let loop_basic_block = backend.context.append_basic_block(fn_value, "loop");
-      let after_basic_block = backend.context.append_basic_block(fn_value, "after");
+      let entry_basic_block = backend.context.append_basic_block(fn_value, "while.cond");
+      let loop_basic_block = backend.context.append_basic_block(fn_value, "while.body");
+      let after_basic_block = backend.context.append_basic_block(fn_value, "while.end");
 
       backend
         .builder
@@ -417,8 +417,8 @@ fn compile_statement<'ctx>(
         .current_function
         .expect("internal error: no current function");
 
-      let entry_basic_block = backend.context.append_basic_block(fn_value, "loop");
-      let after_basic_block = backend.context.append_basic_block(fn_value, "after_loop");
+      let entry_basic_block = backend.context.append_basic_block(fn_value, "loop.body");
+      let after_basic_block = backend.context.append_basic_block(fn_value, "loop.end");
 
       backend
         .builder
