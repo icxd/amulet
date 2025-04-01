@@ -404,9 +404,7 @@ impl Parser {
 
       TokenKind::KwIf => {
         let span = self.expect(TokenKind::KwIf)?.span;
-        self.expect(TokenKind::OpenParen)?;
         let condition = self.parse_expression(false)?;
-        self.expect(TokenKind::CloseParen)?;
         let then = self.parse_block()?;
         let mut else_ = None;
         if self.current().kind == TokenKind::KwElse {
