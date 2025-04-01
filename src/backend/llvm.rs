@@ -14,11 +14,11 @@ use inkwell::{
 };
 
 use crate::{
-  ast::{BinaryOperator, DefinitionLinkage, NumericConstant},
+  ast::{inline_asm::OperandType, BinaryOperator, DefinitionLinkage, NumericConstant},
   checker::{
     CheckedBlock, CheckedExpression, CheckedFunction, CheckedFunctionAttribute,
-    CheckedInlineAsmParameter, CheckedInlineAsmRegisterType, CheckedStatement, CheckedType,
-    CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
+    CheckedInlineAsmOperandAction, CheckedStatement, CheckedType, CheckedTypeDecl, CheckedTypeKind,
+    CheckedUnaryOperator, Project, TypeId,
   },
   compiler::VOID_TYPE_ID,
   Opts,
@@ -355,7 +355,7 @@ fn compile_statement<'ctx>(
 
       let alloca = backend
         .builder
-        .build_alloca(compiled_type, var_decl.name.as_str())
+        .build_alloca(compiled_type, &format!("{}.addr", var_decl.name))
         .expect("internal error: failed to create alloca");
       backend
         .builder
@@ -432,6 +432,65 @@ fn compile_statement<'ctx>(
         .builder
         .build_unconditional_branch(entry_basic_block)
         .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(after_basic_block);
+    }
+
+    CheckedStatement::If {
+      condition,
+      then_block,
+      else_block,
+    } => {
+      let fn_value = backend
+        .current_function
+        .expect("internal error: no current function");
+
+      let entry_basic_block = backend.context.append_basic_block(fn_value, "if.cond");
+      let then_basic_block = backend.context.append_basic_block(fn_value, "if.then");
+      let else_basic_block = backend.context.append_basic_block(fn_value, "if.else");
+      let after_basic_block = backend.context.append_basic_block(fn_value, "if.end");
+
+      backend
+        .builder
+        .build_unconditional_branch(entry_basic_block)
+        .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(entry_basic_block);
+      let condition = compile_expression(backend, project, condition);
+
+      assert!(condition.is_some());
+      let condition = condition.unwrap();
+
+      backend
+        .builder
+        .build_conditional_branch(
+          condition.into_int_value(),
+          then_basic_block,
+          else_basic_block,
+        )
+        .expect("internal error: failed to build branch");
+
+      backend.builder.position_at_end(then_basic_block);
+      compile_block(backend, project, then_block.clone());
+      if then_basic_block.get_terminator().is_none() {
+        backend
+          .builder
+          .build_unconditional_branch(after_basic_block)
+          .expect("internal error: failed to build branch");
+      }
+
+      backend.builder.position_at_end(else_basic_block);
+
+      if let Some(else_block) = else_block {
+        compile_block(backend, project, else_block.clone());
+      }
+
+      if else_basic_block.get_terminator().is_none() {
+        backend
+          .builder
+          .build_unconditional_branch(after_basic_block)
+          .expect("internal error: failed to build branch");
+      }
 
       backend.builder.position_at_end(after_basic_block);
     }
@@ -653,7 +712,7 @@ fn compile_expression<'ctx>(
                   pointee_ty,
                   compiled_expr.into_pointer_value(),
                   &[compiled_idx.into_int_value()],
-                  "",
+                  "arrayidx",
                 )
                 .expect("internal error: failed to build inbounds gep")
             };
@@ -705,7 +764,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Subtract => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -731,7 +789,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Multiply => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -757,7 +814,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Divide => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -783,7 +839,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Modulo => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -798,7 +853,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Equals => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -838,7 +892,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::NotEquals => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -878,7 +931,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::LessThan => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -906,7 +958,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::LessThanEquals => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -934,7 +985,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::GreaterThan => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -962,7 +1012,6 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::GreaterThanEquals => match ty {
           BasicTypeEnum::IntType(_) => {
             let value = backend
@@ -990,14 +1039,83 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
-
         BinaryOperator::Assign => unreachable!(),
-
         BinaryOperator::AddAssign
         | BinaryOperator::SubtractAssign
         | BinaryOperator::MultiplyAssign
         | BinaryOperator::DivideAssign
         | BinaryOperator::ModuloAssign => unreachable!(),
+        BinaryOperator::BitwiseAnd => match ty {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_and(
+                compiled_lhs.into_int_value(),
+                compiled_rhs.into_int_value(),
+                "",
+              )
+              .expect("internal error: failed to build and");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in binary operation in codegen"),
+        },
+        BinaryOperator::BitwiseOr => match ty {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_or(
+                compiled_lhs.into_int_value(),
+                compiled_rhs.into_int_value(),
+                "",
+              )
+              .expect("internal error: failed to build or");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in binary operation in codegen"),
+        },
+        BinaryOperator::BitwiseXor => match ty {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_xor(
+                compiled_lhs.into_int_value(),
+                compiled_rhs.into_int_value(),
+                "",
+              )
+              .expect("internal error: failed to build xor");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in binary operation in codegen"),
+        },
+        BinaryOperator::BitwiseLeftShift => match ty {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_left_shift(
+                compiled_lhs.into_int_value(),
+                compiled_rhs.into_int_value(),
+                "",
+              )
+              .expect("internal error: failed to build left shift");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in binary operation in codegen"),
+        },
+        BinaryOperator::BitwiseRightShift => match ty {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_right_shift(
+                compiled_lhs.into_int_value(),
+                compiled_rhs.into_int_value(),
+                true,
+                "",
+              )
+              .expect("internal error: failed to build right shift");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in binary operation in codegen"),
+        },
       }
     }
 
@@ -1062,6 +1180,54 @@ fn compile_expression<'ctx>(
             .expect("internal error: failed to build load");
           Some(value)
         }
+        CheckedUnaryOperator::AddressOf => {
+          let value = backend
+            .builder
+            .build_alloca(compiled_type, "")
+            .expect("internal error: failed to build alloca");
+          backend
+            .builder
+            .build_store(value, compiled_expr)
+            .expect("internal error: failed to build store");
+          Some(BasicValueEnum::PointerValue(value))
+        }
+        CheckedUnaryOperator::Negate => match compiled_type {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_int_neg(compiled_expr.into_int_value(), "")
+              .expect("internal error: failed to build int neg");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          BasicTypeEnum::FloatType(_) => {
+            let value = backend
+              .builder
+              .build_float_neg(compiled_expr.into_float_value(), "")
+              .expect("internal error: failed to build float neg");
+            Some(BasicValueEnum::FloatValue(value))
+          }
+          _ => panic!("internal error: invalid type in unary operation in codegen"),
+        },
+        CheckedUnaryOperator::Not => match compiled_type {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_not(compiled_expr.into_int_value(), "")
+              .expect("internal error: failed to build not");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in unary operation in codegen"),
+        },
+        CheckedUnaryOperator::BitwiseNot => match compiled_type {
+          BasicTypeEnum::IntType(_) => {
+            let value = backend
+              .builder
+              .build_not(compiled_expr.into_int_value(), "")
+              .expect("internal error: failed to build not");
+            Some(BasicValueEnum::IntValue(value))
+          }
+          _ => panic!("internal error: invalid type in unary operation in codegen"),
+        },
       }
     }
 
@@ -1077,7 +1243,7 @@ fn compile_expression<'ctx>(
             pointee_ty,
             compiled_expr.into_pointer_value(),
             &[compiled_idx.into_int_value()],
-            "",
+            "arrayidx",
           )
           .expect("internal error: failed to build inbounds gep")
       };
@@ -1102,7 +1268,7 @@ fn compile_expression<'ctx>(
 
       let value = backend
         .builder
-        .build_call(callee.clone(), args.as_slice(), "")
+        .build_call(callee.clone(), args.as_slice(), "call")
         .expect("internal error: failed to build call");
 
       let value = value.try_as_basic_value();
@@ -1155,14 +1321,13 @@ fn compile_expression<'ctx>(
       let mut constraints: String = "".into();
 
       for binding in bindings {
-        #[allow(irrefutable_let_patterns)]
-        let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = binding.parameter
-        else {
-          unreachable!()
+        let prefix = match binding.operand.operand_type {
+          OperandType::Register => "r",
+          OperandType::Memory => "",
+          OperandType::Immediate => "N",
         };
-
-        use CheckedInlineAsmRegisterType::*;
-        match reg_type {
+        use CheckedInlineAsmOperandAction::*;
+        match binding.operand.action {
           None => unreachable!(),
           In => {
             let var = compile_expression(backend, project, &binding.var.clone()).unwrap();
@@ -1171,11 +1336,11 @@ fn compile_expression<'ctx>(
 
             param_types.push(compiled_type.into());
             args.push(var.into());
-            constraints.push_str(&format!("r{{{}}},", reg));
+            constraints.push_str(&format!("{}{{{}}},", prefix, binding.operand.register));
           }
           Out(type_id) => {
             if let CheckedExpression::Variable(_var, _) = &binding.var {
-              let compiled_type = compile_type(backend, project, *type_id);
+              let compiled_type = compile_type(backend, project, type_id);
 
               // let ptr_type = backend.context.ptr_type(AddressSpace::default());
               // let var = var.name.clone();
@@ -1184,7 +1349,7 @@ fn compile_expression<'ctx>(
               // args.push(ptr.into());
 
               return_types.push(compiled_type);
-              constraints.push_str(&format!("=r{{{}}},", reg));
+              constraints.push_str(&format!("={}{{{}}},", prefix, binding.operand.register));
             } else {
               panic!();
             }
@@ -1193,15 +1358,9 @@ fn compile_expression<'ctx>(
       }
 
       for clobber in clobbers {
-        #[allow(irrefutable_let_patterns)]
-        let CheckedInlineAsmParameter::Register(reg_type, reg) = clobber
-        else {
-          unreachable!()
-        };
-
-        use CheckedInlineAsmRegisterType::*;
-        match reg_type {
-          None => constraints.push_str(&format!("~{{{}}},", reg)),
+        use CheckedInlineAsmOperandAction::*;
+        match clobber.action {
+          None => constraints.push_str(&format!("~{{{}}},", clobber.register)),
           In => unreachable!(),
           Out(_) => unreachable!(),
         }

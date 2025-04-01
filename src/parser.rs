@@ -2,9 +2,10 @@ use log::trace;
 
 use crate::{
   ast::{
-    inline_asm, BinaryOperator, DefinitionLinkage, ParsedBlock, ParsedCall, ParsedConst,
-    ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
-    ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
+    inline_asm::{self, OperandType},
+    BinaryOperator, DefinitionLinkage, ParsedBlock, ParsedCall, ParsedConst, ParsedExpression,
+    ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement, ParsedType,
+    ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
   },
   compiler::FileId,
   error::{Diagnostic, Result},
@@ -464,52 +465,54 @@ impl Parser {
     }
   }
 
-  fn parse_inline_asm_parameter(&mut self) -> Result<inline_asm::Parameter> {
+  fn parse_inline_asm_parameter(&mut self) -> Result<inline_asm::Operand> {
     trace!("parse_inline_asm_parameter: {:?}", self.current());
 
-    match self.current().kind {
+    let operand_type = match self.current().kind {
       TokenKind::KwReg => {
-        self.expect(TokenKind::KwReg)?;
-        self.expect(TokenKind::OpenParen)?;
-        let reg = self.expect(TokenKind::Identifier)?;
-        let reg_type = match self.current().kind {
-          TokenKind::KwIn => {
-            self.expect(TokenKind::KwIn)?;
-            inline_asm::RegisterType::In
-          }
-          TokenKind::KwOut => {
-            self.expect(TokenKind::KwOut)?;
-            self.expect(TokenKind::Arrow)?;
-            let type_ = self.parse_type()?;
-            inline_asm::RegisterType::Out(type_)
-          }
-          TokenKind::CloseParen => inline_asm::RegisterType::None,
-          _ => {
-            return Err(Diagnostic::error(
-              self.current().span,
-              format!("expected `in` or `out` but found {}", self.current().kind),
-            ));
-          }
-        };
-        self.expect(TokenKind::CloseParen)?;
-
-        Ok(inline_asm::Parameter::Register(
-          reg_type,
-          reg.literal.clone(),
-          reg.span,
-        ))
+        self.pos += 1;
+        OperandType::Register
       }
+      // TokenKind::KwMem => {
+      //     self.pos += 1;
+      //     OperandType::Memory
+      // }
+      TokenKind::KwImm => {
+        self.pos += 1;
+        OperandType::Immediate
+      }
+      _ => todo!(),
+    };
 
+    self.expect(TokenKind::OpenParen)?;
+    let reg = self.expect(TokenKind::Identifier)?;
+    let action = match self.current().kind {
+      TokenKind::KwIn => {
+        self.expect(TokenKind::KwIn)?;
+        inline_asm::OperandAction::In
+      }
+      TokenKind::KwOut => {
+        self.expect(TokenKind::KwOut)?;
+        self.expect(TokenKind::Arrow)?;
+        let type_ = self.parse_type()?;
+        inline_asm::OperandAction::Out(type_)
+      }
+      TokenKind::CloseParen => inline_asm::OperandAction::None,
       _ => {
         return Err(Diagnostic::error(
           self.current().span,
-          format!(
-            "expected inline asm parameter but found {}",
-            self.current().kind
-          ),
+          format!("expected `in` or `out` but found {}", self.current().kind),
         ));
       }
-    }
+    };
+    self.expect(TokenKind::CloseParen)?;
+
+    Ok(inline_asm::Operand {
+      operand_type,
+      action,
+      register: reg.literal.clone(),
+      span: reg.span,
+    })
   }
 
   fn parse_inline_asm(&mut self) -> Result<ParsedExpression> {
@@ -768,6 +771,33 @@ impl Parser {
         self.pos += 1;
         ParsedExpression::Unreachable(span)
       }
+
+      TokenKind::Ampersand => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::AddressOf, span)
+      }
+      TokenKind::Asterisk => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Dereference, span)
+      }
+      TokenKind::Minus => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Negate, span)
+      }
+      TokenKind::Bang => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Not, span)
+      }
+      TokenKind::Tilde => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::BitwiseNot, span)
+      }
+
       _ => {
         return Err(Diagnostic::error(
           span,
@@ -845,11 +875,6 @@ impl Parser {
 
                 expr = ParsedExpression::IndexedStruct(Box::new(expr), name.to_string(), span);
               }
-            }
-
-            TokenKind::Asterisk => {
-              self.pos += 1;
-              expr = ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Dereference, span);
             }
 
             _ => {
@@ -963,6 +988,33 @@ impl Parser {
         self.pos += 1;
         Ok(ParsedExpression::Operator(
           BinaryOperator::GreaterThanEquals,
+          span,
+        ))
+      }
+
+      TokenKind::Ampersand => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::BitwiseAnd, span))
+      }
+      TokenKind::Pipe => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::BitwiseOr, span))
+      }
+      TokenKind::Caret => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::BitwiseXor, span))
+      }
+      TokenKind::LessLess => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(
+          BinaryOperator::BitwiseLeftShift,
+          span,
+        ))
+      }
+      TokenKind::GreaterGreater => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(
+          BinaryOperator::BitwiseRightShift,
           span,
         ))
       }

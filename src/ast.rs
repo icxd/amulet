@@ -333,21 +333,31 @@ pub struct ParsedBlock {
 
 pub mod inline_asm {
   #[derive(Debug, Clone)]
-  pub enum RegisterType {
+  pub enum OperandAction {
     None,
     In,
     Out(super::ParsedType),
   }
 
   #[derive(Debug, Clone)]
-  pub enum Parameter {
-    Register(RegisterType, String, super::Span),
+  pub enum OperandType {
+    Register,
+    Memory,
+    Immediate,
+  }
+
+  #[derive(Debug, Clone)]
+  pub struct Operand {
+    pub(crate) operand_type: OperandType,
+    pub(crate) action: OperandAction,
+    pub(crate) register: String,
+    pub(crate) span: super::Span,
   }
 
   #[derive(Debug, Clone)]
   pub struct Binding {
     pub(crate) var: super::ParsedExpression,
-    pub(crate) parameter: Parameter,
+    pub(crate) parameter: Operand,
     pub(crate) span: super::Span,
   }
 }
@@ -404,7 +414,7 @@ pub enum ParsedExpression {
     volatile: bool,
     asm: Vec<String>,
     bindings: Vec<inline_asm::Binding>,
-    clobbers: Vec<inline_asm::Parameter>,
+    clobbers: Vec<inline_asm::Operand>,
     span: Span,
   },
 
@@ -437,6 +447,12 @@ pub enum BinaryOperator {
   GreaterThan,
   GreaterThanEquals,
 
+  BitwiseAnd,
+  BitwiseOr,
+  BitwiseXor,
+  BitwiseLeftShift,
+  BitwiseRightShift,
+
   Assign,
   AddAssign,
   SubtractAssign,
@@ -449,6 +465,10 @@ pub enum BinaryOperator {
 pub enum UnaryOperator {
   As(ParsedType),
   Dereference,
+  AddressOf,
+  Negate,
+  Not,
+  BitwiseNot,
 }
 
 impl ParsedExpression {

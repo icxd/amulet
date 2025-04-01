@@ -30,6 +30,7 @@ pub enum TokenKind {
   KwFn,
   KwFor,
   KwIf, 
+  KwImm,
   KwIn,
   KwInterface, 
   KwLet, 
@@ -62,10 +63,12 @@ pub enum TokenKind {
   Percent, PercentEqual,
   Equal, EqualEqual,
   Bang, BangEqual,
-  Less, LessEqual,
-  Greater, GreaterEqual,
+  Less, LessLess, LessEqual,
+  Greater, GreaterGreater, GreaterEqual,
   Ampersand, AmpersandEqual,
   Pipe, PipeEqual,
+  Caret, CaretEqual,
+  Tilde,
   Question,
 }
 
@@ -93,6 +96,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::KwFn => "fn",
         TokenKind::KwFor => "for",
         TokenKind::KwIf => "if",
+        TokenKind::KwImm => "imm",
         TokenKind::KwIn => "in",
         TokenKind::KwInterface => "interface",
         TokenKind::KwLet => "let",
@@ -136,13 +140,18 @@ impl std::fmt::Display for TokenKind {
         TokenKind::Bang => "!",
         TokenKind::BangEqual => "!=",
         TokenKind::Less => "<",
+        TokenKind::LessLess => "<<",
         TokenKind::LessEqual => "<=",
         TokenKind::Greater => ">",
+        TokenKind::GreaterGreater => ">>",
         TokenKind::GreaterEqual => ">=",
         TokenKind::Ampersand => "&",
         TokenKind::AmpersandEqual => "&=",
         TokenKind::Pipe => "|",
         TokenKind::PipeEqual => "|=",
+        TokenKind::Caret => "^",
+        TokenKind::CaretEqual => "^=",
+        TokenKind::Tilde => "~",
         TokenKind::Question => "?",
       }
     )
@@ -254,6 +263,7 @@ impl Tokenizer {
               "fn" => TokenKind::KwFn,
               "for" => TokenKind::KwFor,
               "if" => TokenKind::KwIf,
+              "imm" => TokenKind::KwImm,
               "in" => TokenKind::KwIn,
               "interface" => TokenKind::KwInterface,
               "let" => TokenKind::KwLet,
@@ -337,10 +347,10 @@ impl Tokenizer {
             {
               self.pos += 1;
             }
-            let suffix = self.consume_numeric_literal_suffix();
             let end = self.pos;
             let literal = self.source[start..end].to_string();
             let literal = literal.trim_start_matches("0x");
+            let suffix = self.consume_numeric_literal_suffix();
             let span = Span::new(self.file_id, start, end);
             tokens.push(match i128::from_str_radix(literal, 16) {
               Ok(value) => self.make_number_token(value, suffix, span)?,
@@ -668,6 +678,13 @@ impl Tokenizer {
               format!("{}=", c.unwrap()),
             ));
             self.pos += 2;
+          } else if self.source.chars().nth(self.pos + 1).unwrap() == '<' {
+            tokens.push(Token::new(
+              TokenKind::LessLess,
+              Span::new(self.file_id, self.pos, self.pos + 2),
+              format!("{}<", c.unwrap()),
+            ));
+            self.pos += 2;
           } else {
             tokens.push(Token::new(
               TokenKind::Less,
@@ -684,6 +701,13 @@ impl Tokenizer {
               TokenKind::GreaterEqual,
               Span::new(self.file_id, self.pos, self.pos + 2),
               format!("{}=", c.unwrap()),
+            ));
+            self.pos += 2;
+          } else if self.source.chars().nth(self.pos + 1).unwrap() == '>' {
+            tokens.push(Token::new(
+              TokenKind::GreaterGreater,
+              Span::new(self.file_id, self.pos, self.pos + 2),
+              format!("{}>", c.unwrap()),
             ));
             self.pos += 2;
           } else {
@@ -738,6 +762,33 @@ impl Tokenizer {
             ));
             self.pos += 1;
           }
+        }
+
+        Some('^') => {
+          if self.source.chars().nth(self.pos + 1).unwrap() == '=' {
+            tokens.push(Token::new(
+              TokenKind::CaretEqual,
+              Span::new(self.file_id, self.pos, self.pos + 2),
+              format!("{}=", c.unwrap()),
+            ));
+            self.pos += 2;
+          } else {
+            tokens.push(Token::new(
+              TokenKind::Caret,
+              Span::new(self.file_id, self.pos, self.pos + 1),
+              c.unwrap().to_string(),
+            ));
+            self.pos += 1;
+          }
+        }
+
+        Some('~') => {
+          tokens.push(Token::new(
+            TokenKind::Tilde,
+            Span::new(self.file_id, self.pos, self.pos + 1),
+            c.unwrap().to_string(),
+          ));
+          self.pos += 1;
         }
 
         _ => {

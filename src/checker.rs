@@ -162,8 +162,12 @@ pub struct CheckedCall {
 
 #[derive(Debug, Clone)]
 pub enum CheckedUnaryOperator {
-  Dereference,
   As(TypeId),
+  Dereference,
+  AddressOf,
+  Negate,
+  Not,
+  BitwiseNot,
 }
 
 #[derive(Debug, Clone)]
@@ -198,7 +202,7 @@ pub enum CheckedExpression {
     volatile: bool,
     asm: Vec<String>,
     bindings: Vec<CheckedInlineAsmBinding>,
-    clobbers: Vec<CheckedInlineAsmParameter>,
+    clobbers: Vec<CheckedInlineAsmOperand>,
     type_id: TypeId,
     span: Span,
   },
@@ -258,21 +262,23 @@ impl CheckedExpression {
 }
 
 #[derive(Debug, Clone)]
-pub enum CheckedInlineAsmRegisterType {
+pub enum CheckedInlineAsmOperandAction {
   None,
   In,
   Out(TypeId),
 }
 
 #[derive(Debug, Clone)]
-pub enum CheckedInlineAsmParameter {
-  Register(CheckedInlineAsmRegisterType, String),
+pub struct CheckedInlineAsmOperand {
+  pub(crate) operand_type: inline_asm::OperandType,
+  pub(crate) action: CheckedInlineAsmOperandAction,
+  pub(crate) register: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct CheckedInlineAsmBinding {
   pub(crate) var: CheckedExpression,
-  pub(crate) parameter: CheckedInlineAsmParameter,
+  pub(crate) operand: CheckedInlineAsmOperand,
   pub(crate) span: Span,
 }
 
@@ -1536,22 +1542,21 @@ fn typecheck_block(block: &ParsedBlock, scope_id: ScopeId, project: &mut Project
 }
 
 fn typecheck_inline_asm_parameter(
-  param: &inline_asm::Parameter,
+  operand: &inline_asm::Operand,
   scope_id: ScopeId,
   project: &mut Project,
-) -> CheckedInlineAsmParameter {
-  match param {
-    inline_asm::Parameter::Register(ty, reg, _span) => CheckedInlineAsmParameter::Register(
-      match ty {
-        inline_asm::RegisterType::None => CheckedInlineAsmRegisterType::None,
-        inline_asm::RegisterType::In => CheckedInlineAsmRegisterType::In,
-        inline_asm::RegisterType::Out(ty) => {
-          let type_id = typecheck_typename(ty, scope_id, project);
-          CheckedInlineAsmRegisterType::Out(type_id)
-        }
-      },
-      reg.clone(),
-    ),
+) -> CheckedInlineAsmOperand {
+  CheckedInlineAsmOperand {
+    operand_type: operand.operand_type.clone(),
+    action: match &operand.action {
+      inline_asm::OperandAction::None => CheckedInlineAsmOperandAction::None,
+      inline_asm::OperandAction::In => CheckedInlineAsmOperandAction::In,
+      inline_asm::OperandAction::Out(parsed_type) => {
+        let type_id = typecheck_typename(parsed_type, scope_id, project);
+        CheckedInlineAsmOperandAction::Out(type_id)
+      }
+    },
+    register: operand.register.clone(),
   }
 }
 
@@ -2109,12 +2114,15 @@ fn typecheck_expression(
       let checked_expr = typecheck_expression(expr, scope_id, None, project);
 
       let checked_op = match op {
-        UnaryOperator::Dereference => CheckedUnaryOperator::Dereference,
         UnaryOperator::As(type_name) => {
           let type_id = typecheck_typename(type_name, scope_id, project);
-
           CheckedUnaryOperator::As(type_id)
         }
+        UnaryOperator::Dereference => CheckedUnaryOperator::Dereference,
+        UnaryOperator::AddressOf => CheckedUnaryOperator::AddressOf,
+        UnaryOperator::Negate => CheckedUnaryOperator::Negate,
+        UnaryOperator::Not => CheckedUnaryOperator::Not,
+        UnaryOperator::BitwiseNot => CheckedUnaryOperator::BitwiseNot,
       };
 
       let checked_expr = typecheck_unary_operation(&checked_expr, checked_op, *span, project);
@@ -2207,25 +2215,26 @@ fn typecheck_expression(
       let mut checked_bindings = vec![];
       for binding in bindings {
         let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
-        let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
+        let operand = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
 
-        #[allow(irrefutable_let_patterns)]
-        if let CheckedInlineAsmParameter::Register(ref reg_type, _) = checked_param {
-          if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
-            if checked_expr.type_id(project) != *type_id {
+        match operand.action {
+          CheckedInlineAsmOperandAction::None => {}
+          CheckedInlineAsmOperandAction::In => {}
+          CheckedInlineAsmOperandAction::Out(type_id) => {
+            if checked_expr.type_id(project) != type_id {
               project.add_diagnostic(Diagnostic::error(
                 binding.var.span(),
                 "mismatched type for inline asm binding".into(),
               ));
             }
 
-            type_ids.push(*type_id);
+            type_ids.push(type_id);
           }
         }
 
         checked_bindings.push(CheckedInlineAsmBinding {
           var: checked_expr,
-          parameter: checked_param,
+          operand,
           span: binding.var.span(),
         });
       }
@@ -2347,6 +2356,48 @@ fn typecheck_unary_operation(
         CheckedExpression::Garbage(span)
       }
     },
+    CheckedUnaryOperator::AddressOf => {
+      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, expr_type_id, span)
+    }
+    CheckedUnaryOperator::Negate => {
+      if !is_integer(expr_type_id) {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          format!(
+            "cannot negate type {}",
+            project.typename_for_type_id(expr_type_id)
+          ),
+        ));
+      }
+
+      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, expr_type_id, span)
+    }
+    CheckedUnaryOperator::Not => {
+      if expr_type_id != BOOL_TYPE_ID {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          format!(
+            "cannot negate type {}",
+            project.typename_for_type_id(expr_type_id)
+          ),
+        ));
+      }
+
+      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, expr_type_id, span)
+    }
+    CheckedUnaryOperator::BitwiseNot => {
+      if !is_integer(expr_type_id) {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          format!(
+            "cannot negate type {}",
+            project.typename_for_type_id(expr_type_id)
+          ),
+        ));
+      }
+
+      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, expr_type_id, span)
+    }
   }
 }
 
@@ -2433,6 +2484,23 @@ fn typecheck_binary_operator(
     | BinaryOperator::Multiply
     | BinaryOperator::Divide
     | BinaryOperator::Modulo => {
+      if lhs_type_id != rhs_type_id {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          format!("binary operation between incompatible types ({} and {})",
+            project.typename_for_type_id(lhs_type_id),
+            project.typename_for_type_id(rhs_type_id),
+          ),
+        ));
+      }
+
+      type_id = lhs_type_id;
+    }
+    BinaryOperator::BitwiseAnd
+    | BinaryOperator::BitwiseOr
+    | BinaryOperator::BitwiseXor
+    | BinaryOperator::BitwiseLeftShift
+    | BinaryOperator::BitwiseRightShift => {
       if lhs_type_id != rhs_type_id {
         project.add_diagnostic(Diagnostic::error(
           span,
