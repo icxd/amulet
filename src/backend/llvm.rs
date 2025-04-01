@@ -9,9 +9,7 @@ use inkwell::{
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
   types::{AsTypeRef, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
-  },
+  values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
   AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -1149,8 +1147,7 @@ fn compile_expression<'ctx>(
       asm,
       bindings,
       clobbers,
-      type_id,
-      span,
+      ..
     } => {
       let mut param_types: Vec<BasicMetadataTypeEnum<'_>> = vec![];
       let mut args: Vec<BasicMetadataValueEnum<'_>> = vec![];
