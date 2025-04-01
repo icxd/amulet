@@ -4,10 +4,9 @@ use std::collections::HashMap;
 
 use crate::{
   ast::{
-    inline_asm::{self, RegisterType},
-    BinaryOperator, DefinitionLinkage, IntegerConstant, NumericConstant, ParsedBlock, ParsedCall,
-    ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement,
-    ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
+    inline_asm, BinaryOperator, DefinitionLinkage, IntegerConstant, NumericConstant, ParsedBlock,
+    ParsedCall, ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace,
+    ParsedStatement, ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
   },
   compiler::{BOOL_TYPE_ID, CCHAR_TYPE_ID, STRING_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID},
   error::Diagnostic,
@@ -1538,7 +1537,7 @@ fn typecheck_inline_asm_parameter(
   project: &mut Project,
 ) -> CheckedInlineAsmParameter {
   match param {
-    inline_asm::Parameter::Register(ty, reg, span) => CheckedInlineAsmParameter::Register(
+    inline_asm::Parameter::Register(ty, reg, _span) => CheckedInlineAsmParameter::Register(
       match ty {
         inline_asm::RegisterType::None => CheckedInlineAsmRegisterType::None,
         inline_asm::RegisterType::In => CheckedInlineAsmRegisterType::In,
@@ -1623,6 +1622,7 @@ fn typecheck_statement(
         let checked_expr = typecheck_expression(&binding.var, scope_id, None, project);
         let checked_param = typecheck_inline_asm_parameter(&binding.parameter, scope_id, project);
 
+        #[allow(irrefutable_let_patterns)]
         if let CheckedInlineAsmParameter::Register(ref reg_type, _) = checked_param {
           if let CheckedInlineAsmRegisterType::Out(type_id) = reg_type {
             if checked_expr.type_id(project) != *type_id {

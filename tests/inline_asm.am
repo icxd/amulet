@@ -11,4 +11,5 @@ fn syscall1(number: usz, arg1: usz) -> usz {
 }
 
 fn main() {
+  let result = syscall1(60, 0);
 }

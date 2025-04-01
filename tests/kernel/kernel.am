@@ -17,5 +17,7 @@ fn kmain() callconv(C) {
     i += 1usz;
   }
 
-  loop {}
+  loop {
+    asm volatile { "cli" "hlt" }
+  }
 }
