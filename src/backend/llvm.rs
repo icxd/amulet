@@ -16,8 +16,9 @@ use inkwell::{
 use crate::{
   ast::{BinaryOperator, DefinitionLinkage, NumericConstant},
   checker::{
-    CheckedBlock, CheckedExpression, CheckedFunction, CheckedFunctionAttribute, CheckedStatement,
-    CheckedType, CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
+    CheckedBlock, CheckedExpression, CheckedFunction, CheckedFunctionAttribute,
+    CheckedInlineAsmParameter, CheckedInlineAsmRegisterType, CheckedStatement, CheckedType,
+    CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
   },
   compiler::VOID_TYPE_ID,
   Opts,
@@ -444,26 +445,83 @@ fn compile_statement<'ctx>(
     }
 
     CheckedStatement::InlineAsm {
+      volatile,
       asm,
       bindings,
       clobbers,
     } => {
-      // let asm_fn = backend.context.void_type().fn_type(&[], false);
-      // for line in lines.iter() {
-      //   let asm = backend.context.create_inline_asm(
-      //     asm_fn,
-      //     line.to_string(),
-      //     "".into(),
-      //     false,
-      //     false,
-      //     None,
-      //     false,
-      //   );
-      //   backend
-      //     .builder
-      //     .build_indirect_call(asm_fn, asm, &[], "")
-      //     .unwrap();
-      // }
+      let (mut param_types, mut args) = (vec![], vec![]);
+      let mut constraints: String = "".into();
+
+      for binding in bindings {
+        #[allow(irrefutable_let_patterns)]
+        let CheckedInlineAsmParameter::Register(ref reg_type, ref reg) = binding.parameter
+        else {
+          unreachable!()
+        };
+
+        use CheckedInlineAsmRegisterType::*;
+        match reg_type {
+          None => unreachable!(),
+          In => {
+            let var = compile_expression(backend, project, &binding.var.clone()).unwrap();
+            let type_id = binding.var.type_id(project);
+            let compiled_type = compile_type(backend, project, type_id);
+
+            param_types.push(compiled_type.into());
+            args.push(var.into());
+            constraints.push_str(&format!("{{{}}},", reg));
+          }
+          Out(_type_id) => {
+            if let CheckedExpression::Variable(var, _) = &binding.var {
+              // let compiled_type = compile_type(backend, project, *type_id);
+              let ptr_type = backend.context.ptr_type(AddressSpace::default());
+
+              let var = var.name.clone();
+              let ptr = backend.variable_ptrs.borrow()[&var].clone();
+
+              param_types.push(ptr_type.into());
+              args.push(ptr.into());
+              constraints.push_str(&format!("={{{}}},", reg));
+            } else {
+              panic!();
+            }
+          }
+        }
+      }
+
+      for clobber in clobbers {
+        #[allow(irrefutable_let_patterns)]
+        let CheckedInlineAsmParameter::Register(reg_type, reg) = clobber
+        else {
+          unreachable!()
+        };
+
+        use CheckedInlineAsmRegisterType::*;
+        match reg_type {
+          None => constraints.push_str(&format!("~{{{}}},", reg)),
+          In => unreachable!(),
+          Out(_) => unreachable!(),
+        }
+      }
+
+      let asm_fn = backend
+        .context
+        .void_type()
+        .fn_type(param_types.as_slice(), false);
+      let asm = backend.context.create_inline_asm(
+        asm_fn,
+        asm.join("\n"),
+        constraints,
+        *volatile,
+        false,
+        None,
+        false,
+      );
+      backend
+        .builder
+        .build_indirect_call(asm_fn, asm, args.as_slice(), "")
+        .unwrap();
     }
 
     CheckedStatement::Expression(expr) => {
