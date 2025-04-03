@@ -8,7 +8,9 @@ use crate::{
     ParsedCall, ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace,
     ParsedStatement, ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
   },
-  compiler::{BOOL_TYPE_ID, CCHAR_TYPE_ID, STRING_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID},
+  compiler::{
+    BOOL_TYPE_ID, CCHAR_TYPE_ID, RAWPTR_TYPE_ID, STRING_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID,
+  },
   error::Diagnostic,
   span::Span,
 };
@@ -22,6 +24,7 @@ pub type TypeDeclId = usize;
 pub struct Scope {
   pub(crate) namespace_name: Option<String>,
   pub(crate) vars: Vec<CheckedVarDecl>,
+  pub(crate) constants: Vec<CheckedConstant>,
   pub(crate) functions: Vec<(String, FunctionId)>,
   pub(crate) type_decls: Vec<(String, TypeDeclId)>,
   pub(crate) types: Vec<(String, TypeId)>,
@@ -34,6 +37,7 @@ impl Scope {
     Self {
       namespace_name: None,
       vars: vec![],
+      constants: vec![],
       functions: vec![],
       type_decls: vec![],
       types: vec![],
@@ -439,6 +443,7 @@ impl Project {
         CheckedType::Builtin(Span::default()), // String
         CheckedType::Builtin(Span::default()), // Bool
         CheckedType::Builtin(Span::default()), // CChar
+        CheckedType::Builtin(Span::default()), // Rawptr
       ],
       diagnostics: vec![],
       current_function_index: None,
@@ -645,6 +650,7 @@ impl Project {
         crate::compiler::STRING_TYPE_ID => "string".to_string(),
         crate::compiler::BOOL_TYPE_ID => "bool".to_string(),
         crate::compiler::CCHAR_TYPE_ID => "c_char".to_string(),
+        crate::compiler::RAWPTR_TYPE_ID => "rawptr".to_string(),
         _ => "unknown".to_string(),
       },
       CheckedType::TypeDecl(type_decl_id, _) => {
@@ -1978,14 +1984,10 @@ fn typecheck_expression(
   match expr {
     // ParsedExpression::Null(span) => Ok(CheckedExpression::Null(*span, type_id)),
     ParsedExpression::Nullptr(span) => {
-      let type_id = type_hint_id.unwrap_or(UNKNOWN_TYPE_ID);
-      if type_id == UNKNOWN_TYPE_ID {
-        project.add_diagnostic(Diagnostic::error(
-          *span,
-          "unable to infer type of nullptr".into(),
-        ));
+      let mut type_id = type_hint_id.unwrap_or(RAWPTR_TYPE_ID);
+      if let Some(UNKNOWN_TYPE_ID) = type_hint_id {
+        type_id = RAWPTR_TYPE_ID;
       }
-
       CheckedExpression::Nullptr(*span, type_id)
     }
 
