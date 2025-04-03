@@ -1,3 +1,35 @@
+type Serial = class {
+  let port: u16;
+
+  fn init(self) -> bool {
+    io_write8(self.port + 1, 0x00); // Disable interrupts
+    io_write8(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
+    io_write8(self.port, 0x03);     // Set divisor to 3 (lo byte) 38400 baud
+    io_write8(self.port + 1, 0x00); // (hi byte)
+    io_write8(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
+    io_write8(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
+    io_write8(self.port + 4, 0x0B); // IRQs enabled, RTS/DSR set
+    io_write8(self.port + 4, 0x1E); // Set in loopback mode, test the serial chip
+    io_write8(self.port, 0xAE);     // Test serial chip (read back)
+    if io_read8(self.port) != 0xAEu16 {
+        return false; // Error: serial port not found
+    }
+
+    io_write8(self.port + 4, 0x0F); // Set normal operation mode
+    return true;
+  }
+
+  fn is_transmit_empty(self) -> bool {
+    let transmit = io_read8(self.port + 5) & 0x20;
+    return transmit != 0;
+  }
+
+  fn write(self, c: c_char) {
+      while !self.is_transmit_empty() {}
+      io_write8(self.port, c as u8);
+  }
+};
+
 fn strlen(str: c_char*) -> i32 {
   mut length = 0i32;
   while str[length] != 0 {
@@ -25,37 +57,6 @@ fn io_write8(port: u16, value: u8) {
   };
 }
 
-fn serial_init() -> bool {
-  let com1 = 0x3F8u16;
-  io_write8(com1 + 1, 0x00); // Disable interrupts
-  io_write8(com1 + 3, 0x80); // Enable DLAB (set baud rate divisor)
-  io_write8(com1, 0x03);     // Set divisor to 3 (lo byte) 38400 baud
-  io_write8(com1 + 1, 0x00); // (hi byte)
-  io_write8(com1 + 3, 0x03); // 8 bits, no parity, one stop bit
-  io_write8(com1 + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
-  io_write8(com1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
-  io_write8(com1 + 4, 0x1E); // Set in loopback mode, test the serial chip
-  io_write8(com1, 0xAE);     // Test serial chip (read back)
-  if io_read8(com1) != 0xAEu16 {
-      return false; // Error: serial port not found
-  }
-
-  io_write8(com1 + 4, 0x0F); // Set normal operation mode
-  return true;
-}
-
-fn serial_is_transmit_empty() -> bool {
-  let com1 = 0x3F8u16;
-  let transmit = io_read8(com1 + 5) & 0x20;
-  return transmit != 0;
-}
-
-fn serial_write(c: c_char) {
-    let com1 = 0x3F8u16;
-    while !serial_is_transmit_empty() {}
-    io_write8(com1, c as u8);
-}
-
 fn hcf() {
   loop {
     asm volatile { "cli" "hlt" };
@@ -63,7 +64,8 @@ fn hcf() {
 }
 
 fn kmain() callconv(C) {
-  if !serial_init() { hcf(); }
+  let serial = Serial(0x3f8);
+  if !serial.init() { hcf(); }
 
   mut video_buffer = 0xb8000 as u8*;
   let text = c"Hello, world!";
@@ -73,7 +75,7 @@ fn kmain() callconv(C) {
   while i < length {
     video_buffer[i * 2] = text[i] as u8;
     video_buffer[i * 2 + 1] = 0x07;
-    serial_write(text[i]);
+    serial.write(text[i]);
     i += 1i32;
   }
 
