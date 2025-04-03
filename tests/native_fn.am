@@ -1,5 +1,5 @@
 // should be a void* but that's not supported
-native fn malloc(size: usz) -> u8*
+native fn malloc(size: usz) -> rawptr
 
 fn main() {
   mut buffer = malloc(100);

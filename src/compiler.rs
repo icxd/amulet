@@ -32,7 +32,8 @@ pub(crate) const F64_TYPE_ID: usize = 15;
 pub(crate) const STRING_TYPE_ID: usize = 16;
 pub(crate) const BOOL_TYPE_ID: usize = 17;
 pub(crate) const CCHAR_TYPE_ID: usize = 18;
-pub(crate) const COUNT_TYPE_IDS: usize = 19;
+pub(crate) const RAWPTR_TYPE_ID: usize = 19;
+pub(crate) const COUNT_TYPE_IDS: usize = 20;
 
 pub type FileId = usize;
 

@@ -1192,6 +1192,7 @@ impl Parser {
       "string" => Ok(ParsedType::Name("string".to_string(), token.span)),
       "c_char" => Ok(ParsedType::Name("c_char".to_string(), token.span)),
       "void" => Ok(ParsedType::Name("void".to_string(), token.span)),
+      "rawptr" => Ok(ParsedType::Name("rawptr".to_string(), token.span)),
       "any" => Ok(ParsedType::Name("any".to_string(), token.span)),
       "never" => Ok(ParsedType::Name("never".to_string(), token.span)),
       _ => {

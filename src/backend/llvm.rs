@@ -1463,6 +1463,9 @@ fn compile_type<'ctx>(
       )),
       crate::compiler::BOOL_TYPE_ID => BasicTypeEnum::IntType(backend.context.bool_type()),
       crate::compiler::CCHAR_TYPE_ID => BasicTypeEnum::IntType(backend.context.i8_type()),
+      crate::compiler::RAWPTR_TYPE_ID => {
+        BasicTypeEnum::PointerType(backend.context.ptr_type(AddressSpace::default()))
+      }
       _ => unreachable!(),
     },
 

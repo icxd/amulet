@@ -2793,6 +2793,7 @@ pub fn typecheck_typename(
       "string" => crate::compiler::STRING_TYPE_ID,
       "bool" => crate::compiler::BOOL_TYPE_ID,
       "c_char" => crate::compiler::CCHAR_TYPE_ID,
+      "rawptr" => crate::compiler::RAWPTR_TYPE_ID,
       x => {
         let type_id = project.find_type_in_scope(scope_id, x);
         match type_id {
