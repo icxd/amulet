@@ -2291,8 +2291,10 @@ fn typecheck_unary_operation(
       match (expr_type, cast_type) {
         (CheckedType::Builtin(_), CheckedType::Builtin(_))
           if is_integer(expr_type_id) && is_integer(type_id) => {}
-        (CheckedType::Builtin(_), CheckedType::RawPtr(_, _)) if is_integer(expr_type_id) => {}
-        (CheckedType::RawPtr(_, _), CheckedType::Builtin(_)) if is_integer(type_id) => {}
+        (CheckedType::Builtin(_), CheckedType::RawPtr(_, _))
+          if is_integer(expr_type_id) || expr_type_id == RAWPTR_TYPE_ID => {}
+        (CheckedType::RawPtr(_, _), CheckedType::Builtin(_))
+          if is_integer(type_id) || type_id == RAWPTR_TYPE_ID => {}
         (CheckedType::RawPtr(lhs_inner_id, _), CheckedType::RawPtr(rhs_inner_id, _)) => {
           if lhs_inner_id != rhs_inner_id {
             project.add_diagnostic(Diagnostic::warning(
@@ -2754,6 +2756,7 @@ pub fn check_types_for_compat(
         }
       }
     }
+
     _ => {
       if rhs_type_id != lhs_type_id {
         project.add_diagnostic(Diagnostic::error(
