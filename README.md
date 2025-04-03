@@ -15,8 +15,18 @@ A statically-typed, mainly object-oriented programming language written in Rust.
 
 ## 🛠️ Building
 
+### Linux (Ubuntu)
+
 ```bash
-cargo build
+sudo apt install llvm-18-dev clang-18 libpolly-18-dev
+cargo build --release
+```
+
+### MacOS
+
+```bash
+brew install llvm
+cargo build --release
 ```
 
 ## 👋🏻 Hello, World!
