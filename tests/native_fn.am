@@ -1,0 +1,6 @@
+// should be a void* but that's not supported
+native fn malloc(size: usz) -> u8*
+
+fn main() {
+  mut buffer = malloc(100);
+}
