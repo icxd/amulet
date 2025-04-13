@@ -1,0 +1,16 @@
+native fn puts(s: c_char*) -> i32
+
+fn main() -> i32 {
+  let a = 0;
+  if a == 1 {
+    puts(c"a is 1");
+  } else {
+    puts(c"a is not 0");
+    let b = 0;
+    if b == a {
+      puts(c"b is equal to a");
+    }
+  }
+
+  return 0i32;
+}

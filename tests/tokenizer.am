@@ -5,18 +5,28 @@ type Span = class {
 
 type Token = class {
   let kind: u8;
-  let literal: string;
+  let literal: c_char*;
   let span: Span;
+
+  let next: Token*;
 };
 
-fn tokenize(source: string) -> Array<Token> {
-  mut tokens = Array<Token>();
-  mut pos = 0;
-  while pos < source.size {
-    let ch = source.at(pos);
-    pos += 1;
+native fn strlen(s: c_char*) -> usz
+native fn putchar(c: c_char)
+
+fn tokenize(source: c_char*)  {
+  mut pos = 0usz;
+  while pos < strlen(source) {
+    let c = source[pos];
+    if c == ' ' or c == '\n' or c == '\t' {
+      pos += 1usz;
+      continue;
+    }
+
+    putchar(c);
+
+    pos += 1usz;
   }
-  return tokens;
 }
 
 fn main() {

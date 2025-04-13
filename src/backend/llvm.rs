@@ -9,7 +9,9 @@ use inkwell::{
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
   types::{AsTypeRef, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, PointerType, StructType},
-  values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
+  values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
+  },
   AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -35,6 +37,7 @@ pub struct LLVMBackend<'ctx> {
   pub compile_unit: DICompileUnit<'ctx>,
 
   pub current_function: Option<FunctionValue<'ctx>>,
+  pub constants: RefCell<HashMap<String, BasicTypeEnum<'ctx>>>,
   pub variables: RefCell<HashMap<String, BasicTypeEnum<'ctx>>>,
   pub variable_ptrs: RefCell<HashMap<String, PointerValue<'ctx>>>,
   pub functions: RefCell<HashMap<String, FunctionValue<'ctx>>>,
@@ -95,6 +98,7 @@ impl<'ctx> LLVMBackend<'ctx> {
       debug_info_builder,
       compile_unit,
       current_function: None,
+      constants: RefCell::new(HashMap::new()),
       variables: RefCell::new(HashMap::new()),
       variable_ptrs: RefCell::new(HashMap::new()),
       functions: RefCell::new(HashMap::new()),
@@ -105,6 +109,24 @@ impl<'ctx> LLVMBackend<'ctx> {
 }
 
 pub fn compile_namespace<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Project) {
+  for constant in &project.constants.clone() {
+    let compiled_type = compile_type(backend, project, constant.type_id);
+    let value = compile_expression(backend, project, &constant.value);
+    let global_value = backend.module.add_global(
+      compiled_type,
+      Some(AddressSpace::from(4u16)),
+      &constant.name,
+    );
+    global_value.set_initializer(&value.unwrap());
+    global_value.set_linkage(Linkage::External);
+    global_value.set_constant(true);
+
+    backend
+      .constants
+      .borrow_mut()
+      .insert(constant.name.clone(), compiled_type);
+  }
+
   for type_decl in &project.type_decls.clone() {
     compile_type_decl(backend, project, type_decl);
   }
@@ -122,6 +144,19 @@ fn compile_type_decl<'ctx>(
   let CheckedTypeKind::Class(class) = &type_decl.kind else {
     return;
   };
+
+  // Insert opaque type before compiling the struct
+  let opaque_type = unsafe {
+    let struct_type = LLVMStructCreateNamed(
+      backend.context.as_ctx_ref(),
+      type_decl.name.clone().as_mut_ptr() as *mut _,
+    );
+    StructType::new(struct_type)
+  };
+  backend
+    .struct_types
+    .borrow_mut()
+    .insert(type_decl.name.clone(), opaque_type);
 
   let field_type_ids = class
     .fields
@@ -445,54 +480,44 @@ fn compile_statement<'ctx>(
         .current_function
         .expect("internal error: no current function");
 
-      let entry_basic_block = backend.context.append_basic_block(fn_value, "if.cond");
       let then_basic_block = backend.context.append_basic_block(fn_value, "if.then");
-      let else_basic_block = backend.context.append_basic_block(fn_value, "if.else");
-      let after_basic_block = backend.context.append_basic_block(fn_value, "if.end");
+      let else_basic_block = if else_block.is_some() {
+        Some(backend.context.append_basic_block(fn_value, "if.else"))
+      } else {
+        None
+      };
+      let end_basic_block = backend.context.append_basic_block(fn_value, "if.end");
 
-      backend
-        .builder
-        .build_unconditional_branch(entry_basic_block)
-        .expect("internal error: failed to build branch");
-
-      backend.builder.position_at_end(entry_basic_block);
       let condition = compile_expression(backend, project, condition);
-
       assert!(condition.is_some());
       let condition = condition.unwrap();
-
       backend
         .builder
         .build_conditional_branch(
           condition.into_int_value(),
           then_basic_block,
-          else_basic_block,
+          else_basic_block.unwrap_or(end_basic_block),
         )
         .expect("internal error: failed to build branch");
-
       backend.builder.position_at_end(then_basic_block);
       compile_block(backend, project, then_block.clone());
-      if then_basic_block.get_terminator().is_none() {
+      backend
+        .builder
+        .build_unconditional_branch(end_basic_block)
+        .expect("internal error: failed to build branch");
+      if let Some(else_basic_block) = else_basic_block {
+        backend.builder.position_at_end(else_basic_block);
+        compile_block(
+          backend,
+          project,
+          else_block.clone().expect("internal error: no else block"),
+        );
         backend
           .builder
-          .build_unconditional_branch(after_basic_block)
+          .build_unconditional_branch(end_basic_block)
           .expect("internal error: failed to build branch");
       }
-
-      backend.builder.position_at_end(else_basic_block);
-
-      if let Some(else_block) = else_block {
-        compile_block(backend, project, else_block.clone());
-      }
-
-      if else_basic_block.get_terminator().is_none() {
-        backend
-          .builder
-          .build_unconditional_branch(after_basic_block)
-          .expect("internal error: failed to build branch");
-      }
-
-      backend.builder.position_at_end(after_basic_block);
+      backend.builder.position_at_end(end_basic_block);
     }
 
     CheckedStatement::Return(expr) => {
@@ -660,6 +685,13 @@ fn compile_expression<'ctx>(
     }
 
     CheckedExpression::Variable(var, _) => {
+      if let Some(constant_type) = backend.constants.borrow().get(var.name.as_str()) {
+        let value = backend
+          .module
+          .get_global(var.name.as_str())
+          .expect("internal error: failed to get global");
+        return Some(value.as_basic_value_enum());
+      }
       let ty = backend.variables.borrow()[var.name.as_str()].clone();
       let ptr = backend.variable_ptrs.borrow()[var.name.as_str()].clone();
       let value = backend
@@ -1116,6 +1148,28 @@ fn compile_expression<'ctx>(
           }
           _ => panic!("internal error: invalid type in binary operation in codegen"),
         },
+        BinaryOperator::LogicalAnd => {
+          let value = backend
+            .builder
+            .build_and(
+              compiled_lhs.into_int_value(),
+              compiled_rhs.into_int_value(),
+              "",
+            )
+            .expect("internal error: failed to build and");
+          Some(BasicValueEnum::IntValue(value))
+        }
+        BinaryOperator::LogicalOr => {
+          let value = backend
+            .builder
+            .build_or(
+              compiled_lhs.into_int_value(),
+              compiled_rhs.into_int_value(),
+              "",
+            )
+            .expect("internal error: failed to build or");
+          Some(BasicValueEnum::IntValue(value))
+        }
       }
     }
 

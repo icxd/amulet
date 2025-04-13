@@ -77,6 +77,14 @@ pub struct CheckedVarDecl {
 }
 
 #[derive(Debug, Clone)]
+pub struct CheckedConstant {
+  pub(crate) name: String,
+  pub(crate) type_id: TypeId,
+  pub(crate) value: CheckedExpression,
+  pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct CheckedTypeDecl {
   pub(crate) name: String,
   pub(crate) generic_parameters: Vec<TypeId>,
@@ -410,6 +418,7 @@ pub enum Visibility {
 #[derive(Debug)]
 pub struct Project {
   pub(crate) scopes: Vec<Scope>,
+  pub(crate) constants: Vec<CheckedConstant>,
   pub(crate) type_decls: Vec<CheckedTypeDecl>,
   pub(crate) functions: Vec<CheckedFunction>,
   pub(crate) types: Vec<CheckedType>,
@@ -422,6 +431,7 @@ impl Project {
     let global_scope = Scope::new(None);
     Self {
       scopes: vec![global_scope],
+      constants: vec![],
       type_decls: vec![],
       functions: vec![],
       types: vec![
@@ -629,6 +639,41 @@ impl Project {
     scope.functions.push((name, function_id));
   }
 
+  pub fn add_constant_to_scope(
+    &mut self,
+    scope_id: ScopeId,
+    constant: CheckedConstant,
+    span: Span,
+  ) {
+    let scope = &mut self.scopes[scope_id];
+
+    for existing_constant in &scope.constants {
+      if &constant.name == &existing_constant.name {
+        let diagnostic =
+          Diagnostic::error(span, format!("redefinition of constant {}", constant.name));
+        self.add_diagnostic(diagnostic);
+        return;
+      }
+    }
+    scope.constants.push(constant);
+  }
+
+  pub fn find_constant_in_scope(&self, scope_id: ScopeId, name: &str) -> Option<CheckedConstant> {
+    let mut scope_id = Some(scope_id);
+
+    while let Some(current_id) = scope_id {
+      let scope = &self.scopes[current_id];
+      for constant in &scope.constants {
+        if constant.name == name {
+          return Some(constant.clone());
+        }
+      }
+      scope_id = scope.parent;
+    }
+
+    None
+  }
+
   pub fn typename_for_type_id(&self, type_id: TypeId) -> String {
     match &self.types[type_id] {
       CheckedType::Builtin(_) => match type_id {
@@ -776,6 +821,19 @@ pub fn typecheck_namespace(
 
   for function in &parsed_namespace.functions {
     typecheck_function_predecl(function, scope_id, project);
+  }
+
+  for constant in parsed_namespace.constants.iter() {
+    let type_id = typecheck_typename(&constant.r#type, scope_id, project);
+    let value = typecheck_expression(&constant.value, scope_id, Some(type_id), project);
+    let checked_constant = CheckedConstant {
+      name: constant.name.clone(),
+      type_id,
+      value,
+      span: constant.name_span,
+    };
+    project.constants.push(checked_constant.clone());
+    project.add_constant_to_scope(scope_id, checked_constant, constant.name_span);
   }
 
   for (type_decl_id, type_decl) in parsed_namespace.type_decls.iter().enumerate() {
@@ -1126,17 +1184,13 @@ fn typecheck_type_decl(
       }
 
       let checked_type_decl = &mut project.type_decls[type_decl_id];
-      checked_type_decl
+      let checked_class = checked_type_decl
         .kind
         .as_class_mut()
-        .expect("internal error: got something other than a class while typechecking classes ()")
-        .fields = checked_fields;
-      let checked_method_ids = checked_type_decl
-        .kind
-        .as_class_mut()
-        .unwrap()
-        .methods
-        .clone();
+        .expect("internal error: got something other than a class while typechecking classes");
+
+      checked_class.fields = checked_fields;
+      let checked_method_ids = checked_class.methods.clone();
 
       let functions = project.functions.clone();
       let mut checked_methods = vec![];
@@ -1474,6 +1528,10 @@ fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_
   let method_id = project
     .find_function_in_scope(type_decl_scope_id, &function.name)
     .expect("internal error: literally just pushed a checked function and it ain't here gng");
+
+  dbg!(method_id);
+  dbg!(type_decl_id);
+  dbg!(type_decl_scope_id);
 
   let checked_function = &mut project.functions[method_id];
   let function_scope_id = checked_function.scope_id;
@@ -2007,6 +2065,14 @@ fn typecheck_expression(
       if let Some(var) = project.find_var_in_scope(scope_id, name) {
         let _ = unify_with_type_hint(project, &var.type_id);
         return CheckedExpression::Variable(var, *span);
+      } else if let Some(constant) = project.find_constant_in_scope(scope_id, name) {
+        let var_decl = CheckedVarDecl {
+          name: constant.name.clone(),
+          type_id: unify_with_type_hint(project, &constant.type_id),
+          mutable: false,
+          span: constant.span,
+        };
+        return CheckedExpression::Variable(var_decl, *span);
       } else {
         project.add_diagnostic(Diagnostic::error(
           *span,
@@ -2271,6 +2337,10 @@ fn typecheck_expression(
       }
     }
 
+    ParsedExpression::Grouped(inner, _) => {
+      typecheck_expression(&*inner, scope_id, type_hint_id, project)
+    }
+
     _ => todo!("typecheck_expression: {:?}", expr),
   }
 }
@@ -2435,23 +2505,23 @@ fn typecheck_binary_operator(
 
       type_id = BOOL_TYPE_ID;
     }
-    // BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => {
-    //   if lhs_type_id != BOOL_TYPE_ID {
-    //     return Err(Error::new(
-    //       span,
-    //       "left side of logical binary operation is not a boolean".to_string(),
-    //     ));
-    //   }
+    BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => {
+      if lhs_type_id != BOOL_TYPE_ID {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          "left side of logical binary operation is not a boolean".to_string(),
+        ));
+      }
 
-    //   if rhs_type_id != BOOL_TYPE_ID {
-    //     return Err(Error::new(
-    //       "right side of logical binary operation is not a boolean".to_string(),
-    //       span,
-    //     ));
-    //   }
+      if rhs_type_id != BOOL_TYPE_ID {
+        project.add_diagnostic(Diagnostic::error(
+          span,
+          "right side of logical binary operation is not a boolean".to_string(),
+        ));
+      }
 
-    //   type_id = BOOL_TYPE_ID;
-    // }
+      type_id = BOOL_TYPE_ID;
+    }
     BinaryOperator::Assign
     | BinaryOperator::AddAssign
     | BinaryOperator::SubtractAssign

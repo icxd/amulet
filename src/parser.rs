@@ -407,11 +407,13 @@ impl Parser {
         let span = self.expect(TokenKind::KwIf)?.span;
         let condition = self.parse_expression(false)?;
         let then = self.parse_block()?;
+
         let mut else_ = None;
         if self.current().kind == TokenKind::KwElse {
           self.pos += 1;
           else_ = Some(self.parse_block()?);
         }
+
         let mut span = span.join(&then.span);
         if let Some(ref else_) = else_ {
           span = span.join(&else_.span);
@@ -787,7 +789,7 @@ impl Parser {
         let expr = self.parse_expression(false)?;
         ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Negate, span)
       }
-      TokenKind::Bang => {
+      TokenKind::KwNot => {
         self.pos += 1;
         let expr = self.parse_expression(false)?;
         ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::Not, span)
@@ -796,6 +798,13 @@ impl Parser {
         self.pos += 1;
         let expr = self.parse_expression(false)?;
         ParsedExpression::UnaryOp(Box::new(expr), UnaryOperator::BitwiseNot, span)
+      }
+
+      TokenKind::OpenParen => {
+        self.pos += 1;
+        let expr = self.parse_expression(false)?;
+        let cp = self.expect(TokenKind::CloseParen)?;
+        ParsedExpression::Grouped(Box::new(expr), span.join(&cp.span))
       }
 
       _ => {
@@ -1096,6 +1105,15 @@ impl Parser {
           BinaryOperator::ModuloAssign,
           span,
         ))
+      }
+
+      TokenKind::KwAnd => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::LogicalAnd, span))
+      }
+      TokenKind::KwOr => {
+        self.pos += 1;
+        Ok(ParsedExpression::Operator(BinaryOperator::LogicalOr, span))
       }
 
       _ => {

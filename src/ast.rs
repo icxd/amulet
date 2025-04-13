@@ -401,6 +401,7 @@ pub enum ParsedExpression {
     Box<ParsedExpression>,
     Span,
   ),
+  Grouped(Box<ParsedExpression>, Span),
 
   IndexedExpression(Box<ParsedExpression>, Box<ParsedExpression>, Span),
   IndexedStruct(Box<ParsedExpression>, String, Span),
@@ -459,6 +460,9 @@ pub enum BinaryOperator {
   MultiplyAssign,
   DivideAssign,
   ModuloAssign,
+
+  LogicalAnd,
+  LogicalOr,
 }
 
 #[derive(Debug, Clone)]
@@ -485,6 +489,7 @@ impl ParsedExpression {
       ParsedExpression::NamespacedVar(_, _, span) => *span,
       ParsedExpression::UnaryOp(_, _, span) => *span,
       ParsedExpression::BinaryOp(_, _, _, span) => *span,
+      ParsedExpression::Grouped(_, span) => *span,
       ParsedExpression::IndexedExpression(_, _, span) => *span,
       ParsedExpression::IndexedStruct(_, _, span) => *span,
       ParsedExpression::Call(_, span) => *span,
@@ -503,9 +508,9 @@ impl ParsedExpression {
       | ParsedExpression::Operator(BinaryOperator::Divide, _) => 100,
       ParsedExpression::Operator(BinaryOperator::Add, _)
       | ParsedExpression::Operator(BinaryOperator::Subtract, _) => 90,
-      // ParsedExpression::Operator(BinaryOperator::BitwiseLeftShift, _)
-      // | ParsedExpression::Operator(BinaryOperator::BitwiseRightShift, _)
-      // | ParsedExpression::Operator(BinaryOperator::ArithmeticLeftShift, _)
+      ParsedExpression::Operator(BinaryOperator::BitwiseLeftShift, _)
+      | ParsedExpression::Operator(BinaryOperator::BitwiseRightShift, _) => 85,
+      // ParsedExpression::Operator(BinaryOperator::ArithmeticLeftShift, _)
       // | ParsedExpression::Operator(BinaryOperator::ArithmeticRightShift, _) => 85,
       ParsedExpression::Operator(BinaryOperator::LessThan, _)
       | ParsedExpression::Operator(BinaryOperator::LessThanEquals, _)
@@ -513,12 +518,12 @@ impl ParsedExpression {
       | ParsedExpression::Operator(BinaryOperator::GreaterThanEquals, _)
       | ParsedExpression::Operator(BinaryOperator::Equals, _)
       | ParsedExpression::Operator(BinaryOperator::NotEquals, _) => 80,
-      // ParsedExpression::Operator(BinaryOperator::BitwiseAnd, _) => 73,
-      // ParsedExpression::Operator(BinaryOperator::BitwiseXor, _) => 72,
-      // ParsedExpression::Operator(BinaryOperator::BitwiseOr, _) => 71,
-      // ParsedExpression::Operator(BinaryOperator::LogicalAnd, _) => 70,
-      // ParsedExpression::Operator(BinaryOperator::LogicalOr, _)
-      // | ParsedExpression::Operator(BinaryOperator::NoneCoalescing, _) => 69,
+      ParsedExpression::Operator(BinaryOperator::BitwiseAnd, _) => 73,
+      ParsedExpression::Operator(BinaryOperator::BitwiseXor, _) => 72,
+      ParsedExpression::Operator(BinaryOperator::BitwiseOr, _) => 71,
+      ParsedExpression::Operator(BinaryOperator::LogicalAnd, _) => 70,
+      ParsedExpression::Operator(BinaryOperator::LogicalOr, _) => 69,
+      // ParsedExpression::Operator(BinaryOperator::NoneCoalescing, _) => 69,
       ParsedExpression::Operator(BinaryOperator::Assign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseAndAssign, _)
       // | ParsedExpression::Operator(BinaryOperator::BitwiseOrAssign, _)

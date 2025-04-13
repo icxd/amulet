@@ -1,0 +1,53 @@
+type File = class {
+  let ptr: c_char*;
+  let cnt: i32;
+  let base: c_char*;
+  let flag: i32;
+  let file: i32;
+  let charbuf: i32;
+  let bufsiz: i32;
+  let tmpfname: c_char*;
+};
+
+native fn fopen(filename: c_char*, mode: c_char*) -> File*
+native fn fclose(stream: File*) -> i32
+native fn perror(s: c_char*)
+native fn ferror(stream: File*) -> i32
+native fn putchar(ch: i32) -> i32
+native fn fputs(str: c_char*, stream: File*) -> i32
+native fn fgetc(stream: File*) -> i32
+native fn getc(stream: File*) -> i32
+native fn puts(str: c_char*)
+native fn feof(file: File*) -> i32
+native fn rewind(stream: File*)
+
+fn main() -> i32 {
+    let filename: c_char* = c"/tmp/unique_name.txt";
+    mut is_ok: i32 = 1i32;
+    
+    let fp = fopen(filename, c"w+");
+    if fp != (nullptr as File*) {
+        perror(c"File opening failed!");
+        return is_ok;
+    }
+    fputs(c"Hello, world!\n", fp);
+    rewind(fp);
+
+    mut c: i32 = fgetc(fp);
+    while c != -1i32 {
+        putchar(c);
+        c = fgetc(fp);
+    }    
+
+    if ferror(fp) != 0 {
+        puts(c"I/O error when reading");
+    } else {
+        if feof(fp) {
+            puts(c"End of file is reached successfully");
+            is_ok = 0i32;
+        }
+    }
+
+    fclose(fp);
+    return is_ok;
+}

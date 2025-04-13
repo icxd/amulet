@@ -17,6 +17,7 @@ pub enum TokenKind {
   String,
   Char,
 
+  KwAnd,
   KwAs,
   KwAsm,
   KwBind,
@@ -38,6 +39,8 @@ pub enum TokenKind {
   KwMut,
   KwNative, 
   KwNoReturn,
+  KwNot,
+  KwOr,
   KwOut,
   KwPkg,
   KwReg,
@@ -83,6 +86,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::Float => "float",
         TokenKind::String => "string",
         TokenKind::Char => "char",
+        TokenKind::KwAnd => "and",
         TokenKind::KwAs => "as",
         TokenKind::KwAsm => "asm",
         TokenKind::KwBind => "bind",
@@ -104,6 +108,8 @@ impl std::fmt::Display for TokenKind {
         TokenKind::KwMut => "mut",
         TokenKind::KwNative => "native",
         TokenKind::KwNoReturn => "noreturn",
+        TokenKind::KwNot => "not",
+        TokenKind::KwOr => "or",
         TokenKind::KwOut => "out",
         TokenKind::KwPkg => "pkg",
         TokenKind::KwReg => "reg",
@@ -250,6 +256,7 @@ impl Tokenizer {
           let literal = self.source[start..end].to_string();
           tokens.push(Token::new(
             match literal.as_str() {
+              "and" => TokenKind::KwAnd,
               "as" => TokenKind::KwAs,
               "asm" => TokenKind::KwAsm,
               "bind" => TokenKind::KwBind,
@@ -271,6 +278,8 @@ impl Tokenizer {
               "mut" => TokenKind::KwMut,
               "native" => TokenKind::KwNative,
               "noreturn" => TokenKind::KwNoReturn,
+              "not" => TokenKind::KwNot,
+              "or" => TokenKind::KwOr,
               "out" => TokenKind::KwOut,
               "pkg" => TokenKind::KwPkg,
               "reg" => TokenKind::KwReg,
