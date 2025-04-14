@@ -2,6 +2,7 @@
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/icxd/amulet/rust.yml?style=for-the-badge)
 ![GitHub](https://img.shields.io/github/license/icxd/amulet?style=for-the-badge)
+![Discord](https://img.shields.io/discord/1357315638409822208?label=Discord&style=for-the-badge)
 
 A statically-typed, mainly object-oriented programming language written in Rust.
 
