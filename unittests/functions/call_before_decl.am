@@ -1,0 +1,10 @@
+native fn puts(str: c_char*);
+
+fn main() -> i32 {
+  f();
+  return 0i32;
+}
+
+fn f() {
+  puts(c"test");
+}

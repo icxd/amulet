@@ -1,0 +1,10 @@
+/// type=pass
+/// exitcode=0
+/// output=Hello, world!\n
+
+native fn puts(s: c_char*) -> i32;
+
+fn main() -> i32 {
+    puts(c"Hello, world!");
+    return 0i32;
+}

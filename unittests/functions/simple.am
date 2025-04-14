@@ -1,0 +1,7 @@
+/// type=pass
+/// exitcode=42
+/// output=
+
+fn main() -> i32 {
+  return 42i32;
+}
