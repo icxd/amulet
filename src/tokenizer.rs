@@ -993,17 +993,17 @@ impl Tokenizer {
       Some(NumericSuffix::F64) => Token::float(span, NumericConstant::F64(number as f64)),
 
       _ => {
-        if number > i128::MAX.into() {
-          if number <= i128::MAX.into() {
-            Token::integer(span, NumericConstant::U128(number as u128))
+        if number > i32::MAX.into() {
+          if number <= i32::MAX.into() {
+            Token::integer(span, NumericConstant::U32(number as u32))
           } else {
             return Err(Diagnostic::error(
               span,
               format!("Integer literal {} too large", number),
             ));
           }
-        } else if number >= i128::MIN.into() {
-          Token::integer(span, NumericConstant::I128(number as i128))
+        } else if number >= i32::MIN.into() {
+          Token::integer(span, NumericConstant::I32(number as i32))
         } else {
           return Err(Diagnostic::error(
             span,
