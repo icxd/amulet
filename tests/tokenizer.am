@@ -11,8 +11,8 @@ type Token = class {
   let next: Token*;
 };
 
-native fn strlen(s: c_char*) -> usz
-native fn putchar(c: c_char)
+native fn strlen(s: c_char*) -> usz;
+native fn putchar(c: c_char);
 
 fn tokenize(source: c_char*)  {
   mut pos = 0usz;

@@ -1,4 +1,4 @@
-native fn malloc(size: usz) -> rawptr
+native fn malloc(size: usz) -> rawptr;
 
 const A: usz = 123;
 

@@ -9,17 +9,17 @@ type File = class {
   let tmpfname: c_char*;
 };
 
-native fn fopen(filename: c_char*, mode: c_char*) -> File*
-native fn fclose(stream: File*) -> i32
-native fn perror(s: c_char*)
-native fn ferror(stream: File*) -> i32
-native fn putchar(ch: i32) -> i32
-native fn fputs(str: c_char*, stream: File*) -> i32
-native fn fgetc(stream: File*) -> i32
-native fn getc(stream: File*) -> i32
-native fn puts(str: c_char*)
-native fn feof(file: File*) -> i32
-native fn rewind(stream: File*)
+native fn fopen(filename: c_char*, mode: c_char*) -> File*;
+native fn fclose(stream: File*) -> i32;
+native fn perror(s: c_char*);
+native fn ferror(stream: File*) -> i32;
+native fn putchar(ch: i32) -> i32;
+native fn fputs(str: c_char*, stream: File*) -> i32;
+native fn fgetc(stream: File*) -> i32;
+native fn getc(stream: File*) -> i32;
+native fn puts(str: c_char*);
+native fn feof(file: File*) -> i32;
+native fn rewind(stream: File*);
 
 fn main() -> i32 {
   let filename: c_char* = c"/tmp/unique_name.txt";
@@ -41,7 +41,7 @@ fn main() -> i32 {
 
   if ferror(fp) != 0 {
     puts(c"I/O error when reading");
-  } else if feof(fp) {
+  } else if feof(fp) == 0 {
     puts(c"End of file is reached successfully");
     is_ok = 0i32;
   }

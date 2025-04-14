@@ -1,4 +1,4 @@
-native fn puts(s: c_char*) -> i32
+native fn puts(s: c_char*) -> i32;
 
 fn main() -> i32 {
   let a = 0;
