@@ -302,7 +302,7 @@ pub enum CheckedStatement {
   If {
     condition: CheckedExpression,
     then_block: CheckedBlock,
-    else_block: Option<CheckedBlock>,
+    else_block: Option<Box<CheckedStatement>>,
   },
   While {
     condition: CheckedExpression,
@@ -1580,13 +1580,20 @@ fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_
 fn statement_definitely_returns(stmt: &CheckedStatement) -> bool {
   match stmt {
     CheckedStatement::Return(_) => true,
+    CheckedStatement::Break(_) => true,
     CheckedStatement::Block(block) => block.definitely_returns,
     CheckedStatement::While { block, .. } => block.definitely_returns,
+    CheckedStatement::Loop(block) => block.definitely_returns,
     CheckedStatement::If {
       then_block,
       else_block: Some(else_block),
       ..
-    } => then_block.definitely_returns && else_block.definitely_returns,
+    } => then_block.definitely_returns && statement_definitely_returns(else_block),
+    CheckedStatement::If {
+      then_block,
+      else_block: None,
+      ..
+    } => then_block.definitely_returns,
     _ => false,
   }
 }
@@ -1654,20 +1661,30 @@ fn typecheck_statement(
       CheckedStatement::Block(block)
     }
 
-    ParsedStatement::If(condition, then_block, else_block, _span) => {
+    ParsedStatement::If(condition, then_block, else_block, span) => {
       let condition = typecheck_expression(condition, scope_id, None, project);
+      let type_id = condition.type_id(project);
+      if type_id != BOOL_TYPE_ID {
+        project.add_diagnostic(Diagnostic::error(
+          *span,
+          format!(
+            "if condition must be a boolean, found `{}`",
+            project.typename_for_type_id(type_id)
+          ),
+        ));
+      }
 
       let then_block = typecheck_block(then_block, scope_id, project);
 
       let mut checked_else_block = None;
       if let Some(else_block) = else_block {
-        checked_else_block = Some(typecheck_block(else_block, scope_id, project));
+        checked_else_block = Some(typecheck_statement(else_block, scope_id, project));
       }
 
       CheckedStatement::If {
         condition,
         then_block,
-        else_block: checked_else_block,
+        else_block: checked_else_block.map(Box::new),
       }
     }
 

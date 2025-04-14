@@ -411,12 +411,12 @@ impl Parser {
         let mut else_ = None;
         if self.current().kind == TokenKind::KwElse {
           self.pos += 1;
-          else_ = Some(self.parse_block()?);
+          else_ = Some(self.parse_statement()?);
         }
 
         let mut span = span.join(&then.span);
         if let Some(ref else_) = else_ {
-          span = span.join(&else_.span);
+          span = span.join(&else_.span());
         }
         Ok(ParsedStatement::If(
           condition,

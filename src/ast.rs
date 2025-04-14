@@ -370,7 +370,7 @@ pub enum ParsedStatement {
   If(
     ParsedExpression,
     ParsedBlock,
-    Option<Box<ParsedBlock>>,
+    Option<Box<ParsedStatement>>,
     Span,
   ),
   While(ParsedExpression, ParsedBlock, Span),
@@ -381,6 +381,21 @@ pub enum ParsedStatement {
   Return(ParsedExpression, Span),
 
   Expression(ParsedExpression),
+}
+impl ParsedStatement {
+  pub(crate) fn span(&self) -> Span {
+    match self {
+      ParsedStatement::VarDecl(_, _, span) => *span,
+      ParsedStatement::Block(block) => block.span,
+      ParsedStatement::If(_, _, _, span) => *span,
+      ParsedStatement::While(_, _, span) => *span,
+      ParsedStatement::Loop(_, span) => *span,
+      ParsedStatement::Break(span) => *span,
+      ParsedStatement::Continue(span) => *span,
+      ParsedStatement::Return(_, span) => *span,
+      ParsedStatement::Expression(expr) => expr.span(),
+    }
+  }
 }
 
 #[derive(Debug, Clone)]

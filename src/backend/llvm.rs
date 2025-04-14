@@ -507,11 +507,9 @@ fn compile_statement<'ctx>(
         .expect("internal error: failed to build branch");
       if let Some(else_basic_block) = else_basic_block {
         backend.builder.position_at_end(else_basic_block);
-        compile_block(
-          backend,
-          project,
-          else_block.clone().expect("internal error: no else block"),
-        );
+
+        compile_statement(backend, project, else_block.as_ref().unwrap());
+
         backend
           .builder
           .build_unconditional_branch(end_basic_block)
