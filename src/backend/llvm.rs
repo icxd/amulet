@@ -128,6 +128,14 @@ pub fn compile_namespace<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Pr
   }
 
   for type_decl in &project.type_decls.clone() {
+    compile_type_decl_predecl(backend, project, type_decl);
+  }
+
+  for function in &project.functions.clone() {
+    compile_function_predecl(backend, project, function);
+  }
+
+  for type_decl in &project.type_decls.clone() {
     compile_type_decl(backend, project, type_decl);
   }
 
@@ -136,12 +144,12 @@ pub fn compile_namespace<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Pr
   }
 }
 
-fn compile_type_decl<'ctx>(
+fn compile_type_decl_predecl<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
-  project: &mut Project,
+  _project: &mut Project,
   type_decl: &CheckedTypeDecl,
 ) {
-  let CheckedTypeKind::Class(class) = &type_decl.kind else {
+  let CheckedTypeKind::Class(_class) = &type_decl.kind else {
     return;
   };
 
@@ -157,6 +165,16 @@ fn compile_type_decl<'ctx>(
     .struct_types
     .borrow_mut()
     .insert(type_decl.name.clone(), opaque_type);
+}
+
+fn compile_type_decl<'ctx>(
+  backend: &mut LLVMBackend<'ctx>,
+  project: &mut Project,
+  type_decl: &CheckedTypeDecl,
+) {
+  let CheckedTypeKind::Class(class) = &type_decl.kind else {
+    return;
+  };
 
   let field_type_ids = class
     .fields
@@ -170,10 +188,12 @@ fn compile_type_decl<'ctx>(
     field_types.push(field_type);
   }
   let struct_type = unsafe {
-    let struct_type = LLVMStructCreateNamed(
-      backend.context.as_ctx_ref(),
-      type_decl.name.clone().as_mut_ptr() as *mut _,
-    );
+    let struct_type = backend
+      .struct_types
+      .borrow_mut()
+      .get(type_decl.name.as_str())
+      .expect("internal error: failed to get struct type")
+      .as_type_ref();
     LLVMStructSetBody(
       struct_type,
       field_types
@@ -203,7 +223,7 @@ fn compile_type_decl<'ctx>(
     .insert(type_decl.name.clone(), field_names);
 }
 
-fn compile_function<'ctx>(
+fn compile_function_predecl<'ctx>(
   backend: &mut LLVMBackend<'ctx>,
   project: &mut Project,
   function: &CheckedFunction,
@@ -244,14 +264,55 @@ fn compile_function<'ctx>(
     ))
   };
 
+  let fn_value = backend.module.add_function(
+    &function.name,
+    fn_type,
+    if function.linkage == DefinitionLinkage::External {
+      Some(Linkage::External)
+    } else {
+      None
+    },
+  );
+  backend
+    .functions
+    .borrow_mut()
+    .insert(function.name.clone(), fn_value);
+}
+
+fn compile_function<'ctx>(
+  backend: &mut LLVMBackend<'ctx>,
+  project: &mut Project,
+  function: &CheckedFunction,
+) {
+  let param_type_ids = function
+    .params
+    .iter()
+    .map(|param| param.type_id)
+    .collect::<Vec<_>>();
+  let param_names = function
+    .params
+    .iter()
+    .map(|param| param.name.as_str())
+    .collect::<Vec<_>>();
+
+  let mut param_types = vec![];
+  for (name, type_id) in param_names.iter().zip(param_type_ids.iter()) {
+    let param_type = compile_type(backend, project, *type_id);
+    param_types.push(param_type.as_type_ref());
+    backend
+      .variables
+      .borrow_mut()
+      .insert(name.to_string(), param_type);
+  }
+
   match &function.linkage {
     DefinitionLinkage::Internal => {
-      let fn_value = backend.module.add_function(&function.name, fn_type, None);
-      backend.current_function = Some(fn_value);
-      backend
+      let fn_value = *backend
         .functions
         .borrow_mut()
-        .insert(function.name.clone(), fn_value);
+        .get(function.name.as_str())
+        .unwrap();
+      backend.current_function = Some(fn_value);
 
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);
@@ -287,21 +348,13 @@ fn compile_function<'ctx>(
 
       backend.current_function = None;
     }
-    DefinitionLinkage::External => {
-      let fn_value = backend
-        .module
-        .add_function(&function.name, fn_type, Some(Linkage::External));
-      backend
-        .functions
-        .borrow_mut()
-        .insert(function.name.clone(), fn_value);
-    }
+    DefinitionLinkage::External => {}
     DefinitionLinkage::ImplicitConstructor => {
-      let fn_value = backend.module.add_function(&function.name, fn_type, None);
-      backend
+      let fn_value = *backend
         .functions
         .borrow_mut()
-        .insert(function.name.clone(), fn_value);
+        .get(function.name.as_str())
+        .unwrap();
 
       let entry_basic_block = backend.context.append_basic_block(fn_value, "entry");
       backend.builder.position_at_end(entry_basic_block);

@@ -1,3 +1,7 @@
+/// type=pass
+/// exitcode=0
+/// output=test\n
+
 native fn puts(str: c_char*);
 
 fn main() -> i32 {
