@@ -1,0 +1,21 @@
+/// type=pass
+/// exitcode=0
+/// output=x is less than y\n
+
+native fn puts(s: c_char*) -> i32;
+
+fn main() -> i32 {
+  let x = 5;
+  let y = 10;
+  let z = 15;
+
+  if x < y {
+    puts(c"x is less than y");
+  } else if y < z {
+    puts(c"y is less than z");
+  } else {
+    puts(c"None of the conditions were met");
+  }
+
+  return 0i32;
+}

@@ -1,0 +1,39 @@
+/// type=pass
+/// exitcode=-10
+/// output=
+
+fn f(aa: i32, bb: bool, cc: c_char*, dd: i32) -> i32 {
+  mut a = aa;
+  mut b = bb;
+  mut c = cc;
+  mut d = dd;
+
+  a = a + 1;
+  b = not b;
+  c[0] = 'a';
+  d = d + 1;
+
+  mut bbb = 0;
+  if b {
+    bbb = 1;
+  } else {
+    bbb = 0;
+  }
+
+  return a + bbb + c[0] as i32 + d;
+}
+
+fn main() -> i32 {
+  mut a = c"balls";
+  mut b = true;
+  mut c = 0;
+  mut d = 0;
+  
+  let ret = f(1i32, b, a, d);
+  
+  if ret != 1 + 1 + 'a' as i32 + 1 {
+    return -1i32;
+  }
+  
+  return 0;
+}
