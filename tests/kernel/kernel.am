@@ -25,7 +25,7 @@ type Serial = class {
   }
 
   fn write(self, c: c_char) {
-      while !self.is_transmit_empty() {}
+      while not self.is_transmit_empty() {}
       io_write8(self.port, c as u8);
   }
 };
@@ -65,7 +65,7 @@ fn hcf() {
 
 fn kmain() callconv(C) {
   let serial = Serial(0x3f8);
-  if !serial.init() { hcf(); }
+  if not serial.init() { hcf(); }
 
   mut video_buffer = 0xb8000 as u8*;
   let text = c"Hello, world!";
