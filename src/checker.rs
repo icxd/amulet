@@ -236,7 +236,7 @@ impl CheckedExpression {
       CheckedExpression::Variable(var, _) => var.type_id,
       CheckedExpression::NamespacedVariable(_, var, _) => var.type_id,
       CheckedExpression::UnaryOp(_, _, type_id, _) => *type_id,
-      CheckedExpression::BinaryOp(_, _, right, _, _) => right.type_id(project),
+      CheckedExpression::BinaryOp(_, _, _, type_id, _) => *type_id,
       CheckedExpression::IndexedExpression(_, _, type_id, _) => *type_id,
       CheckedExpression::IndexedStruct(_, _, _, type_id, _) => *type_id,
       CheckedExpression::Call(_, type_id, _) => *type_id,
