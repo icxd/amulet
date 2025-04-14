@@ -53,9 +53,9 @@ def run_test(test_file: str) -> bool:
         return False
     
     expected_exit_code = expected_exit_code_line[expected_exit_code_index + len("/// exitcode="):].strip()
-    if not expected_exit_code.isdigit():
-        print(f"\033[31;1merror: \033[0minvalid expected exit code `{expected_exit_code}` in {test_file}")
-        return False
+    # if not expected_exit_code.isdigit():
+    #     print(f"\033[31;1merror: \033[0minvalid expected exit code `{expected_exit_code}` in {test_file}")
+    #     return False
     if int(expected_exit_code) != executable_result.returncode:
         print(f"\033[31;1merror: \033[0mexpected exit code {expected_exit_code} but got {executable_result.returncode} in {test_file}")
         print(executable_result.stderr)
