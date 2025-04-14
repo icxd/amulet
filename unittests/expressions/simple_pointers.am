@@ -1,0 +1,11 @@
+/// type=pass
+/// exitcode=69
+/// output=
+
+fn main() -> i32 {
+  let a = 69i32;
+  let b = &a;
+  let c = *b;
+
+  return c;
+}

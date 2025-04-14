@@ -1,0 +1,13 @@
+/// type=pass
+/// exitcode=1
+/// output=
+
+fn main() -> i32 {
+  let a = 5i32;
+  let b = 10i32;
+  let c = 15i32;
+  let d = 20i32;
+  let e = 25i32;
+
+  return a + (b - c) * d / e;
+}

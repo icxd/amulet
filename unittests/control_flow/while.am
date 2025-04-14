@@ -1,0 +1,12 @@
+/// type=pass
+/// exitcode=10
+/// output=
+
+fn main() -> i32 {
+  mut i = 0i32;
+  while i < 10i32 {
+    i += 1i32;
+  }
+
+  return i;
+}
