@@ -2444,7 +2444,9 @@ fn typecheck_unary_operation(
       }
     },
     CheckedUnaryOperator::AddressOf => {
-      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, expr_type_id, span)
+      let type_id = expr.type_id(project);
+      let type_id = project.find_or_add_type_id(CheckedType::RawPtr(type_id, span));
+      CheckedExpression::UnaryOp(Box::new(expr.clone()), op, type_id, span)
     }
     CheckedUnaryOperator::Negate => {
       if !is_integer(expr_type_id) {
