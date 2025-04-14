@@ -1529,10 +1529,6 @@ fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_
     .find_function_in_scope(type_decl_scope_id, &function.name)
     .expect("internal error: literally just pushed a checked function and it ain't here gng");
 
-  dbg!(method_id);
-  dbg!(type_decl_id);
-  dbg!(type_decl_scope_id);
-
   let checked_function = &mut project.functions[method_id];
   let function_scope_id = checked_function.scope_id;
 

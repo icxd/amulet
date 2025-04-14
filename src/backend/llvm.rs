@@ -687,7 +687,7 @@ fn compile_expression<'ctx>(
     }
 
     CheckedExpression::Variable(var, _) => {
-      if let Some(constant_type) = backend.constants.borrow().get(var.name.as_str()) {
+      if let Some(_) = backend.constants.borrow().get(var.name.as_str()) {
         let value = backend
           .module
           .get_global(var.name.as_str())
