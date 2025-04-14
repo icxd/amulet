@@ -43,14 +43,15 @@ impl Parser {
       let token = self.tokens.get(self.pos).unwrap();
 
       match token.kind {
-        TokenKind::KwFn | TokenKind::KwNative => {
-          let linkage = if token.kind == TokenKind::KwFn {
-            DefinitionLinkage::Internal
-          } else {
-            self.expect(TokenKind::KwNative)?;
-            DefinitionLinkage::External
-          };
-          let fun = self.parse_fn(linkage)?;
+        TokenKind::KwFn => {
+          let fun = self.parse_fn(DefinitionLinkage::Internal)?;
+          namespace.functions.push(fun);
+        }
+
+        TokenKind::KwNative => {
+          self.expect(TokenKind::KwNative)?;
+          let fun = self.parse_fn(DefinitionLinkage::External)?;
+          self.expect(TokenKind::Semicolon)?;
           namespace.functions.push(fun);
         }
 
