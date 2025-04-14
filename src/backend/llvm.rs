@@ -526,6 +526,10 @@ fn compile_statement<'ctx>(
         .expect("internal error: failed to build return");
     }
 
+    CheckedStatement::Block(block) => {
+      compile_block(backend, project, block.clone());
+    }
+
     CheckedStatement::Expression(expr) => {
       let _ = compile_expression(backend, project, expr);
     }
