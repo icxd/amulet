@@ -3,9 +3,10 @@ use log::trace;
 use crate::{
   ast::{
     inline_asm::{self, OperandType},
-    BinaryOperator, DefinitionLinkage, ParsedBlock, ParsedCall, ParsedConst, ParsedExpression,
-    ParsedFunction, ParsedFunctionAttribute, ParsedNamespace, ParsedStatement, ParsedType,
-    ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl, UnaryOperator,
+    BinaryOperator, DefinitionLinkage, ParsedBlock, ParsedCall, ParsedConst, ParsedEnum,
+    ParsedEnumVariant, ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace,
+    ParsedStatement, ParsedType, ParsedTypeArg, ParsedTypeDecl, ParsedTypeDeclData, ParsedVarDecl,
+    UnaryOperator,
   },
   compiler::FileId,
   error::{Diagnostic, Result},
@@ -88,6 +89,37 @@ impl Parser {
           });
         }
 
+        TokenKind::KwEnum => {
+          self.expect(TokenKind::KwEnum)?;
+          let name = self.expect(TokenKind::Identifier)?;
+          let name_span = name.span;
+          let type_parameters = self.parse_type_params()?;
+          let underlying_type = if self.current().kind == TokenKind::Colon {
+            self.expect(TokenKind::Colon)?;
+            self.parse_type()?
+          } else {
+            ParsedType::Empty
+          };
+          let _ = self.expect(TokenKind::OpenBrace)?;
+          let mut variants = vec![];
+          while self.current().kind != TokenKind::CloseBrace {
+            let variant = self.parse_enum_variant()?;
+            variants.push(variant);
+            if self.current().kind == TokenKind::Comma {
+              self.expect(TokenKind::Comma)?;
+            }
+          }
+          self.expect(TokenKind::CloseBrace)?;
+          namespace.enums.push(ParsedEnum {
+            name: name.literal.clone(),
+            name_span,
+            type_parameters,
+            linkage: DefinitionLinkage::External,
+            underlying_type,
+            variants,
+          });
+        }
+
         _ => {
           return Err(Diagnostic::error(
             token.span,
@@ -98,6 +130,67 @@ impl Parser {
     }
 
     Ok(namespace)
+  }
+
+  fn parse_enum_variant(&mut self) -> Result<ParsedEnumVariant> {
+    trace!("parse_enum_variant: {:?}", self.current());
+    let name = self.expect(TokenKind::Identifier)?;
+    let name_span = name.span;
+
+    match self.current().kind {
+      TokenKind::Equal => {
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expression(false)?;
+        Ok(ParsedEnumVariant::WithValue(
+          name.literal.clone(),
+          value,
+          name_span,
+        ))
+      }
+      TokenKind::OpenParen => {
+        self.expect(TokenKind::OpenParen)?;
+        let mut fields = vec![];
+        while self.current().kind != TokenKind::CloseParen {
+          let field = self.parse_type()?;
+          fields.push(field);
+          if self.current().kind == TokenKind::Comma {
+            self.expect(TokenKind::Comma)?;
+          }
+        }
+        self.expect(TokenKind::CloseParen)?;
+        Ok(ParsedEnumVariant::TupleLike(
+          name.literal.clone(),
+          fields,
+          name_span,
+        ))
+      }
+      TokenKind::OpenBrace => {
+        self.expect(TokenKind::OpenBrace)?;
+        let mut fields = vec![];
+        while self.current().kind != TokenKind::CloseBrace {
+          let name = self.expect(TokenKind::Identifier)?;
+          let name_span = name.span;
+          let _ = self.expect(TokenKind::Colon)?;
+          let field_type = self.parse_type()?;
+          fields.push(ParsedVarDecl {
+            name: name.literal.clone(),
+            ty: field_type,
+            mutable: false,
+            span: name_span,
+          });
+          if self.current().kind == TokenKind::Comma {
+            self.expect(TokenKind::Comma)?;
+          }
+        }
+        self.expect(TokenKind::CloseBrace)?;
+        Ok(ParsedEnumVariant::StructLike(
+          name.literal.clone(),
+          fields,
+          name_span,
+        ))
+      }
+      _ => Ok(ParsedEnumVariant::Untyped(name.literal.clone(), name_span)),
+    }
   }
 
   fn parse_type_decl(&mut self) -> Result<ParsedTypeDecl> {

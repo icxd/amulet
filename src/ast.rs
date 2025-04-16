@@ -231,6 +231,7 @@ pub struct ParsedNamespace {
   pub(crate) name: Option<String>,
   pub(crate) functions: Vec<ParsedFunction>,
   pub(crate) type_decls: Vec<ParsedTypeDecl>,
+  pub(crate) enums: Vec<ParsedEnum>,
   pub(crate) constants: Vec<ParsedConst>,
   pub(crate) namespaces: Vec<ParsedNamespace>,
 }
@@ -241,10 +242,29 @@ impl ParsedNamespace {
       name: None,
       functions: vec![],
       type_decls: vec![],
+      enums: vec![],
       constants: vec![],
       namespaces: vec![],
     }
   }
+}
+
+#[derive(Debug)]
+pub enum ParsedEnumVariant {
+  Untyped(String, Span),
+  WithValue(String, ParsedExpression, Span),
+  TupleLike(String, Vec<ParsedType>, Span),
+  StructLike(String, Vec<ParsedVarDecl>, Span),
+}
+
+#[derive(Debug)]
+pub struct ParsedEnum {
+  pub(crate) name: String,
+  pub(crate) name_span: Span,
+  pub(crate) type_parameters: Vec<ParsedTypeArg>,
+  pub(crate) linkage: DefinitionLinkage,
+  pub(crate) underlying_type: ParsedType,
+  pub(crate) variants: Vec<ParsedEnumVariant>,
 }
 
 #[derive(Debug)]
