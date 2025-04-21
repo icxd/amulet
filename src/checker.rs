@@ -2127,7 +2127,23 @@ fn typecheck_expression(
           let type_id = unify_with_type_hint(project, &checked_call.type_id);
           CheckedExpression::MethodCall(Box::new(checked_expr), checked_call, type_id, *span)
         }
+        CheckedType::GenericInstance(struct_id, _, _) => {
+          // ignore the inner types for now, but we'll need them in the future
+          let struct_id = *struct_id;
+          let checked_call = typecheck_call(
+            call,
+            scope_id,
+            span,
+            project,
+            Some(&checked_expr),
+            Some(struct_id),
+            type_hint_id,
+          );
 
+          let type_id = unify_with_type_hint(project, &checked_call.type_id);
+
+          CheckedExpression::MethodCall(Box::new(checked_expr), checked_call, type_id, *span)
+        }
         _ => {
           project.add_diagnostic(Diagnostic::error(
             expr.span(),
@@ -2249,7 +2265,8 @@ fn typecheck_expression(
       let checked_expr_type_id = checked_expr.type_id(project);
       let checked_expr_type = &project.types[checked_expr_type_id];
       match checked_expr_type {
-        CheckedType::TypeDecl(type_decl_id, _) => {
+        CheckedType::GenericInstance(type_decl_id, _, _)
+        | CheckedType::TypeDecl(type_decl_id, _) => {
           let type_decl = &project.type_decls[*type_decl_id];
           let CheckedTypeKind::Class(class) = &type_decl.kind else {
             project.add_diagnostic(Diagnostic::error(
