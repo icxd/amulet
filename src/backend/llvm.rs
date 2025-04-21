@@ -349,7 +349,7 @@ fn compile_function<'ctx>(
       backend.current_function = None;
     }
     DefinitionLinkage::External => {}
-    DefinitionLinkage::ImplicitConstructor => {
+    DefinitionLinkage::ImplicitConstructor | DefinitionLinkage::ImplicitEnumConstructor => {
       let fn_value = *backend
         .functions
         .borrow_mut()
