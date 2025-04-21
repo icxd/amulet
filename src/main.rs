@@ -45,6 +45,9 @@ pub struct Opts {
 
   #[arg(long, default_value_t = false)]
   json_errors: bool,
+
+  #[arg(short = 'E', long, default_value_t = false)]
+  emit_llvm_ir: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]

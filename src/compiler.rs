@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use inkwell::context::Context;
+use inkwell::{context::Context, targets::FileType};
 
 use crate::{
   backend::llvm::{compile_namespace, LLVMBackend},
@@ -156,11 +156,19 @@ impl Compiler {
     compile_namespace(&mut backend, project);
     backend.debug_info_builder.finalize();
 
+    if self.opts.emit_llvm_ir {
     backend.module.print_to_file(path.clone()).unwrap();
+    }
+
     if let Err(err) = backend.module.verify() {
       println!("\x1b[31;1minternal error: \x1b[0;1munable to verify LLVM module\x1b[0m");
       println!("{}", err.to_string());
     }
+
+    backend
+      .machine
+      .write_to_file(&backend.module, FileType::Object, &path.with_extension("o"))
+      .unwrap();
 
     Ok(())
   }
