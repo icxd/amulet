@@ -1,0 +1,8 @@
+/// type=pass
+/// exitcode=13
+/// output=
+
+fn main() -> i32 {
+  let a = "Hello, world!";
+  return a.len() as i32;
+}
