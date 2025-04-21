@@ -305,6 +305,7 @@ pub enum DefinitionLinkage {
   Internal,
   External,
   ImplicitConstructor,
+  ImplicitEnumConstructor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
