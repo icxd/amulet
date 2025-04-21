@@ -1414,6 +1414,30 @@ fn compile_expression<'ctx>(
       Some(value.unwrap_left())
     }
 
+    CheckedExpression::MethodCall(expr, call, _, _) => {
+      let fns = backend.functions.clone();
+      let fns = fns.borrow();
+      let callee = fns.get(&call.name).unwrap();
+
+      let mut args: Vec<BasicMetadataValueEnum<'ctx>> =
+        vec![compile_expression(backend, project, expr)?.into()];
+      for arg in call.args.iter() {
+        let arg = compile_expression(backend, project, arg)?;
+        args.push(arg.into());
+      }
+
+      let value = backend
+        .builder
+        .build_call(callee.clone(), args.as_slice(), "call")
+        .expect("internal error: failed to build call");
+
+      let value = value.try_as_basic_value();
+      if value.is_right() {
+        return None;
+      }
+      Some(value.unwrap_left())
+    }
+
     CheckedExpression::IndexedStruct(expr, name, type_decl_id, _, _) => {
       let compiled_expr = compile_expression(backend, project, expr)?;
 
