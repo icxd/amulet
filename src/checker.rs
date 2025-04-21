@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
   ast::{
     inline_asm, BinaryOperator, DefinitionLinkage, IntegerConstant, NumericConstant, ParsedBlock,
-    ParsedCall, ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace,
-    ParsedStatement, ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
+    ParsedCall, ParsedEnum, ParsedEnumVariant, ParsedExpression, ParsedFunction,
+    ParsedFunctionAttribute, ParsedNamespace, ParsedStatement, ParsedType, ParsedTypeDecl,
+    ParsedTypeDeclData, UnaryOperator,
   },
   compiler::{BOOL_TYPE_ID, CCHAR_TYPE_ID, RAWPTR_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID},
   error::Diagnostic,
@@ -17,6 +18,7 @@ pub type TypeId = usize;
 pub type ScopeId = usize;
 pub type FunctionId = usize;
 pub type TypeDeclId = usize;
+pub type EnumId = usize;
 
 #[derive(Debug)]
 pub struct Scope {
@@ -25,6 +27,7 @@ pub struct Scope {
   pub(crate) constants: Vec<CheckedConstant>,
   pub(crate) functions: Vec<(String, FunctionId)>,
   pub(crate) type_decls: Vec<(String, TypeDeclId)>,
+  pub(crate) enums: Vec<(String, EnumId)>,
   pub(crate) types: Vec<(String, TypeId)>,
   pub(crate) parent: Option<ScopeId>,
   pub(crate) children: Vec<ScopeId>,
@@ -38,6 +41,7 @@ impl Scope {
       constants: vec![],
       functions: vec![],
       type_decls: vec![],
+      enums: vec![],
       types: vec![],
       parent,
       children: vec![],
@@ -340,7 +344,9 @@ pub enum CheckedType {
   Builtin(Span),
   TypeVariable(String, Option<TypeId>, Span),
   GenericInstance(TypeDeclId, Vec<TypeId>, Span),
+  GenericEnumInstance(EnumId, Vec<TypeId>, Span),
   TypeDecl(TypeDeclId, Span),
+  Enum(EnumId, Span),
   RawPtr(TypeId, Span),
 }
 
@@ -353,6 +359,10 @@ impl PartialEq for CheckedType {
         a == b && ap == bp
       }
       (CheckedType::TypeDecl(a, _), CheckedType::TypeDecl(b, _)) => a == b,
+      (CheckedType::GenericEnumInstance(a, ap, _), CheckedType::GenericEnumInstance(b, bp, _)) => {
+        a == b && ap == bp
+      }
+      (CheckedType::Enum(a, _), CheckedType::Enum(b, _)) => a == b,
       (CheckedType::RawPtr(a, _), CheckedType::RawPtr(b, _)) => a == b,
       _ => false,
     }
@@ -365,7 +375,9 @@ impl CheckedType {
       CheckedType::Builtin(span) => *span,
       CheckedType::TypeVariable(_, _, span) => *span,
       CheckedType::GenericInstance(_, _, span) => *span,
+      CheckedType::GenericEnumInstance(_, _, span) => *span,
       CheckedType::TypeDecl(_, span) => *span,
+      CheckedType::Enum(_, span) => *span,
       CheckedType::RawPtr(_, span) => *span,
     }
   }
@@ -418,11 +430,31 @@ pub enum Visibility {
   Protected,
 }
 
+#[derive(Clone, Debug)]
+pub struct CheckedEnum {
+  pub name: String,
+  pub generic_parameters: Vec<TypeId>,
+  pub variants: Vec<CheckedEnumVariant>,
+  pub scope_id: ScopeId,
+  pub definition_linkage: DefinitionLinkage,
+  pub underlying_type_id: Option<TypeId>,
+  pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum CheckedEnumVariant {
+  Untyped(String, Span),
+  WithValue(String, CheckedExpression, Span),
+  TupleLike(String, Vec<TypeId>, Span),
+  StructLike(String, Vec<CheckedVarDecl>, Span),
+}
+
 #[derive(Debug)]
 pub struct Project {
   pub(crate) scopes: Vec<Scope>,
   pub(crate) constants: Vec<CheckedConstant>,
   pub(crate) type_decls: Vec<CheckedTypeDecl>,
+  pub(crate) enums: Vec<CheckedEnum>,
   pub(crate) functions: Vec<CheckedFunction>,
   pub(crate) types: Vec<CheckedType>,
   pub(crate) diagnostics: Vec<Diagnostic>,
@@ -436,6 +468,7 @@ impl Project {
       scopes: vec![global_scope],
       constants: vec![],
       type_decls: vec![],
+      enums: vec![],
       functions: vec![],
       types: vec![
         CheckedType::Builtin(Span::default()), // Void
@@ -553,6 +586,42 @@ impl Project {
       }
     }
     scope.type_decls.push((name, type_decl_id));
+  }
+
+  pub fn find_enum_in_scope(&self, scope_id: ScopeId, enum_name: &str) -> Option<EnumId> {
+    let mut scope_id = Some(scope_id);
+
+    while let Some(current_id) = scope_id {
+      let scope = &self.scopes[current_id];
+      for e in &scope.enums {
+        if e.0 == enum_name {
+          return Some(e.1);
+        }
+      }
+      scope_id = scope.parent;
+    }
+
+    None
+  }
+
+  pub fn add_enum_to_scope(
+    &mut self,
+    scope_id: ScopeId,
+    name: String,
+    enum_id: EnumId,
+    span: Span,
+  ) {
+    let scope = &mut self.scopes[scope_id];
+    for (existing_enum, _) in &scope.enums {
+      if &name == existing_enum {
+        let diagnostic =
+          Diagnostic::error(span, format!("redefinition of type declaration {}", name));
+        self.add_diagnostic(diagnostic);
+        return;
+      }
+    }
+
+    scope.enums.push((name, enum_id));
   }
 
   fn find_var_in_scope(&self, scope_id: usize, name: &str) -> Option<CheckedVarDecl> {
@@ -702,8 +771,28 @@ impl Project {
       CheckedType::TypeDecl(type_decl_id, _) => {
         format!("{}", self.type_decls[*type_decl_id].name)
       }
+      CheckedType::Enum(enum_id, _) => {
+        format!("enum {}", self.enums[*enum_id].name)
+      }
       CheckedType::GenericInstance(type_decl_id, type_args, _) => {
         let mut output = format!("{}", self.type_decls[*type_decl_id].name);
+
+        output.push('<');
+        let mut first = true;
+        for arg in type_args {
+          if !first {
+            output.push_str(", ");
+          } else {
+            first = false;
+          }
+          output.push_str(&self.typename_for_type_id(*arg))
+        }
+        output.push('>');
+
+        output
+      }
+      CheckedType::GenericEnumInstance(enum_id, type_args, _) => {
+        let mut output = format!("enum {}", self.enums[*enum_id].name);
 
         output.push('<');
         let mut first = true;
@@ -790,6 +879,7 @@ pub fn typecheck_namespace(
   project: &mut Project,
 ) {
   let project_type_decl_len = project.type_decls.len();
+  let project_enum_len = project.enums.len();
   let project_function_len = project.functions.len();
 
   for namespace in parsed_namespace.namespaces.iter() {
@@ -814,10 +904,26 @@ pub fn typecheck_namespace(
     );
   }
 
+  for (enum_id, enum_) in parsed_namespace.enums.iter().enumerate() {
+    let enum_id = enum_id + project_enum_len;
+    project
+      .types
+      .push(CheckedType::Enum(enum_id, enum_.name_span));
+
+    let enum_type_id = project.types.len() - 1;
+    project.add_type_to_scope(scope_id, enum_.name.clone(), enum_type_id, enum_.name_span)
+  }
+
   for (type_decl_id, type_decl) in parsed_namespace.type_decls.iter().enumerate() {
     let type_decl_id = type_decl_id + project_type_decl_len;
 
     typecheck_type_decl_predecl(type_decl, type_decl_id, scope_id, project);
+  }
+
+  for (enum_id, enum_) in parsed_namespace.enums.iter().enumerate() {
+    let enum_id = enum_id + project_enum_len;
+
+    typecheck_enum_predecl(enum_, enum_id, scope_id, project);
   }
 
   for function in &parsed_namespace.functions {
@@ -846,11 +952,373 @@ pub fn typecheck_namespace(
     );
   }
 
+  for (enum_id, enum_) in parsed_namespace.enums.iter().enumerate() {
+    typecheck_enum(
+      enum_,
+      enum_id + project_enum_len,
+      project.find_type_in_scope(scope_id, &enum_.name).unwrap(),
+      project.enums[enum_id + project_enum_len].scope_id,
+      scope_id,
+      project,
+    );
+  }
+
   for (i, function) in parsed_namespace.functions.iter().enumerate() {
     project.current_function_index = Some(i + project_function_len);
     typecheck_function(function, scope_id, project);
     project.current_function_index = None;
   }
+}
+
+fn typecheck_enum_predecl(
+  enum_: &ParsedEnum,
+  enum_id: EnumId,
+  parent_scope_id: ScopeId,
+  project: &mut Project,
+) {
+  let enum_scope_id = project.create_scope(parent_scope_id);
+  let mut generic_parameters = Vec::new();
+
+  for type_arg in &enum_.type_parameters {
+    project.types.push(CheckedType::TypeVariable(
+      type_arg.name.clone(),
+      None,
+      type_arg.span,
+    ));
+    let parameter_type_id = project.types.len() - 1;
+    project.add_type_to_scope(
+      enum_scope_id,
+      type_arg.name.clone(),
+      parameter_type_id,
+      type_arg.span,
+    );
+
+    generic_parameters.push(parameter_type_id);
+  }
+
+  let type_id = typecheck_typename(&enum_.underlying_type, enum_scope_id, project);
+  let underlying_type_id = if type_id == UNKNOWN_TYPE_ID {
+    None
+  } else {
+    Some(type_id)
+  };
+
+  project.enums.push(CheckedEnum {
+    name: enum_.name.clone(),
+    generic_parameters,
+    variants: Vec::new(),
+    scope_id: enum_scope_id,
+    definition_linkage: enum_.linkage,
+    underlying_type_id,
+    span: enum_.name_span,
+  });
+
+  project.add_enum_to_scope(
+    parent_scope_id,
+    enum_.name.clone(),
+    enum_id,
+    enum_.name_span,
+  )
+}
+
+fn typecheck_enum(
+  enum_: &ParsedEnum,
+  enum_id: EnumId,
+  enum_type_id: TypeId,
+  enum_scope_id: ScopeId,
+  parent_scope_id: ScopeId,
+  project: &mut Project,
+) {
+  let mut variants = vec![];
+
+  let mut next_constant_value: Option<u64> = Some(0);
+  let mut seen_names = HashSet::new();
+
+  let cast_to_underlying = |x: ParsedExpression, project: &mut Project| -> CheckedExpression {
+    let span = x.span();
+    let expression = ParsedExpression::UnaryOp(
+      Box::new(x),
+      UnaryOperator::As(enum_.underlying_type.clone()),
+      span,
+    );
+    typecheck_expression(&expression, enum_scope_id, None, project)
+  };
+
+  let underlying_type_id = project.enums[enum_id].underlying_type_id;
+
+  for variant in &enum_.variants {
+    match &variant {
+      ParsedEnumVariant::Untyped(name, span) => {
+        if seen_names.contains(name) {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("enum variant '{}' is defined more than once", name),
+          ));
+        } else {
+          seen_names.insert(name.clone());
+          if underlying_type_id.is_some() {
+            if next_constant_value.is_none() {
+              project.add_diagnostic(Diagnostic::error(
+                                *span,
+                                "missing enum variant value, the enum underlying type is not numeric, and so all enum variants must have explicit values".to_string(),
+                            ));
+            } else {
+              let checked_expression = cast_to_underlying(
+                ParsedExpression::NumericConstant(
+                  NumericConstant::U64(next_constant_value.unwrap()),
+                  *span,
+                ),
+                project,
+              );
+
+              variants.push(CheckedEnumVariant::WithValue(
+                name.clone(),
+                checked_expression,
+                *span,
+              ));
+              next_constant_value = Some(next_constant_value.unwrap() + 1);
+
+              project.add_var_to_scope(
+                enum_scope_id,
+                CheckedVarDecl {
+                  name: name.clone(),
+                  type_id: enum_type_id,
+                  mutable: false,
+                  span: *span,
+                },
+                *span,
+              );
+            }
+          } else {
+            variants.push(CheckedEnumVariant::Untyped(name.clone(), *span));
+          }
+
+          if project
+            .find_function_in_scope(enum_scope_id, name.as_str())
+            .is_none()
+          {
+            let function_scope_id = project.create_scope(parent_scope_id);
+
+            let checked_constructor = CheckedFunction {
+              name: name.clone(),
+              name_span: *span,
+              return_type_id: enum_type_id,
+              params: vec![],
+              scope_id: function_scope_id,
+              visibility: Visibility::Public,
+              generic_parameters: enum_
+                .type_parameters
+                .iter()
+                .map(|x| {
+                  GenericParameter::InferenceGuide(
+                    project.find_type_in_scope(enum_scope_id, &x.name).unwrap(),
+                  )
+                })
+                .collect(),
+              block: CheckedBlock::new(),
+              linkage: DefinitionLinkage::ImplicitEnumConstructor,
+              attributes: vec![],
+            };
+
+            project.functions.push(checked_constructor);
+
+            project.add_function_to_scope(
+              enum_scope_id,
+              name.clone(),
+              project.functions.len() - 1,
+              *span,
+            )
+          }
+        }
+      }
+      ParsedEnumVariant::WithValue(name, value, span) => {
+        if seen_names.contains(name) {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("enum variant '{}' is defined more than once", name),
+          ));
+        } else {
+          seen_names.insert(name.clone());
+          let checked_expression = cast_to_underlying((*value).clone(), project);
+          match checked_expression.to_integer_constant() {
+            Some(constant) => {
+              next_constant_value = Some(constant.to_usize() as u64 + 1);
+            }
+            None => {
+              project.add_diagnostic(Diagnostic::error(
+                *span,
+                format!(
+                  "enum variant '{}' in enum '{}' has a non-constant value: {:?}",
+                  name, enum_.name, checked_expression
+                ),
+              ));
+            }
+          }
+
+          variants.push(CheckedEnumVariant::WithValue(
+            name.clone(),
+            checked_expression,
+            *span,
+          ));
+
+          project.add_var_to_scope(
+            enum_scope_id,
+            CheckedVarDecl {
+              name: name.clone(),
+              type_id: enum_type_id,
+              mutable: false,
+              span: *span,
+            },
+            *span,
+          );
+        }
+      }
+      ParsedEnumVariant::TupleLike(name, members, span) => {
+        if seen_names.contains(name) {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("enum variant '{}' is defined more than once", name),
+          ));
+        } else {
+          seen_names.insert(name.clone());
+          let mut checked_members = Vec::new();
+          for member in members {
+            let decl = typecheck_typename(&member, enum_scope_id, project);
+            checked_members.push(decl)
+          }
+
+          variants.push(CheckedEnumVariant::TupleLike(
+            name.clone(),
+            checked_members.clone(),
+            *span,
+          ));
+
+          if project
+            .find_function_in_scope(enum_scope_id, name.as_str())
+            .is_none()
+          {
+            let function_scope_id = project.create_scope(parent_scope_id);
+
+            let checked_constructor = CheckedFunction {
+              name: name.clone(),
+              name_span: *span,
+              return_type_id: enum_type_id,
+              params: checked_members
+                .iter()
+                .enumerate()
+                .map(|(i, type_id)| CheckedVarDecl {
+                  name: format!("_{i}"),
+                  type_id: *type_id,
+                  mutable: false,
+                  span: Span::default(),
+                })
+                .collect(),
+              visibility: Visibility::Public,
+              scope_id: function_scope_id,
+              generic_parameters: enum_
+                .type_parameters
+                .iter()
+                .map(|x| {
+                  GenericParameter::InferenceGuide(
+                    project.find_type_in_scope(enum_scope_id, &x.name).unwrap(),
+                  )
+                })
+                .collect(),
+              block: CheckedBlock::new(),
+              linkage: DefinitionLinkage::ImplicitEnumConstructor,
+              attributes: vec![],
+            };
+
+            project.functions.push(checked_constructor);
+
+            project.add_function_to_scope(
+              enum_scope_id,
+              name.clone(),
+              project.functions.len() - 1,
+              *span,
+            )
+          }
+        }
+      }
+      ParsedEnumVariant::StructLike(name, members, span) => {
+        if seen_names.contains(name) {
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("enum variant '{}' is defined more than once", name),
+          ));
+        } else {
+          seen_names.insert(name.clone());
+          let mut member_names = HashSet::new();
+          let mut checked_members = Vec::new();
+          for member in members {
+            if member_names.contains(&member.name) {
+              project.add_diagnostic(Diagnostic::error(
+                *span,
+                format!(
+                  "enum variant '{}' has a member named '{}' more than once",
+                  name, member.name
+                ),
+              ));
+            } else {
+              member_names.insert(member.name.clone());
+              let decl = typecheck_typename(&member.ty, enum_scope_id, project);
+              checked_members.push(CheckedVarDecl {
+                name: member.name.clone(),
+                type_id: decl,
+                mutable: member.mutable,
+                span: member.span,
+              })
+            }
+          }
+
+          variants.push(CheckedEnumVariant::StructLike(
+            name.clone(),
+            checked_members.clone(),
+            *span,
+          ));
+
+          if project
+            .find_function_in_scope(enum_scope_id, name.as_str())
+            .is_none()
+          {
+            let function_scope_id = project.create_scope(parent_scope_id);
+
+            let checked_constructor = CheckedFunction {
+              name: name.clone(),
+              name_span: *span,
+              return_type_id: enum_type_id,
+              params: checked_members,
+              visibility: Visibility::Public,
+              scope_id: function_scope_id,
+              generic_parameters: enum_
+                .type_parameters
+                .iter()
+                .map(|x| {
+                  GenericParameter::InferenceGuide(
+                    project.find_type_in_scope(enum_scope_id, &x.name).unwrap(),
+                  )
+                })
+                .collect(),
+              block: CheckedBlock::new(),
+              linkage: DefinitionLinkage::ImplicitEnumConstructor,
+              attributes: vec![],
+            };
+
+            project.functions.push(checked_constructor);
+
+            project.add_function_to_scope(
+              enum_scope_id,
+              name.clone(),
+              project.functions.len() - 1,
+              *span,
+            )
+          }
+        }
+      }
+    }
+  }
+
+  project.enums[enum_id].variants = variants;
 }
 
 fn typecheck_type_decl_predecl(
@@ -1748,6 +2216,18 @@ fn resolve_call<'a>(
 
       if type_decl.generic_parameters.is_empty() {
         namespaces[0].generic_parameters = Some(type_decl.generic_parameters.clone());
+      }
+
+      None
+    } else if let Some(enum_id) = project.find_enum_in_scope(scope_id, namespace) {
+      let enum_ = &project.enums[enum_id];
+
+      if let Some(function_id) = project.find_function_in_scope(enum_.scope_id, &call.name) {
+        return Some(project.functions[function_id].clone());
+      }
+
+      if !enum_.generic_parameters.is_empty() {
+        namespaces[0].generic_parameters = Some(enum_.generic_parameters.clone());
       }
 
       None
@@ -2673,6 +3153,18 @@ fn substitute_typevars_in_type_helper(
         span,
       ));
     }
+    CheckedType::GenericEnumInstance(enum_id, args, span) => {
+      let span = *span;
+      let enum_id = *enum_id;
+      let mut new_args = args.clone();
+
+      for arg in &mut new_args {
+        *arg = substitute_typevars_in_type(*arg, specializations, project);
+      }
+
+      return project
+        .find_or_add_type_id(CheckedType::GenericEnumInstance(enum_id, new_args, span));
+    }
     CheckedType::TypeDecl(type_decl_id, span) => {
       let span = *span;
       let type_decl_id = *type_decl_id;
@@ -2692,6 +3184,24 @@ fn substitute_typevars_in_type_helper(
         ));
       }
     }
+
+    CheckedType::Enum(enum_id, span) => {
+      let span = *span;
+      let enum_id = *enum_id;
+      let enum_ = &project.enums[enum_id];
+
+      if !enum_.generic_parameters.is_empty() {
+        let mut new_args = enum_.generic_parameters.clone();
+
+        for arg in &mut new_args {
+          *arg = substitute_typevars_in_type(*arg, specializations, project);
+        }
+
+        return project
+          .find_or_add_type_id(CheckedType::GenericEnumInstance(enum_id, new_args, span));
+      }
+    }
+
     _ => {}
   }
 
@@ -2788,6 +3298,55 @@ pub fn check_types_for_compat(
         }
       }
     }
+    CheckedType::GenericEnumInstance(lhs_enum_id, lhs_args, _) => {
+      let lhs_args = lhs_args.clone();
+      let rhs_type = &project.types[rhs_type_id];
+      match rhs_type {
+        CheckedType::GenericEnumInstance(rhs_enum_id, rhs_args, _) => {
+          let rhs_args = rhs_args.clone();
+          if lhs_enum_id == rhs_enum_id {
+            let lhs_enum = &project.enums[*lhs_enum_id];
+            if rhs_args.len() != lhs_args.len() {
+              project.add_diagnostic(Diagnostic::error(
+                span,
+                format!(
+                  "mismatched number of generic parameters for {}",
+                  lhs_enum.name
+                ),
+              ));
+            }
+
+            let mut idx = 0;
+
+            while idx < lhs_args.len() {
+              let lhs_arg_type_id = lhs_args[idx];
+              let rhs_arg_type_id = rhs_args[idx];
+
+              check_types_for_compat(
+                lhs_arg_type_id,
+                rhs_arg_type_id,
+                specializations,
+                span,
+                project,
+              );
+              idx += 1;
+            }
+          }
+        }
+        _ => {
+          if rhs_type_id != lhs_type_id {
+            project.add_diagnostic(Diagnostic::error(
+              span,
+              format!(
+                "type mismatch: expected {}, but got {}",
+                project.typename_for_type_id(lhs_type_id),
+                project.typename_for_type_id(rhs_type_id),
+              ),
+            ))
+          }
+        }
+      }
+    }
     CheckedType::TypeDecl(lhs_type_decl_id, _) => {
       if rhs_type_id == lhs_type_id {
         return Some(());
@@ -2857,6 +3416,63 @@ pub fn check_types_for_compat(
               ),
             ));
             return None;
+          }
+        }
+      }
+    }
+
+    CheckedType::Enum(lhs_enum_id, lhs_span) => {
+      let lhs_span = *lhs_span;
+      if rhs_type_id == lhs_type_id {
+        return None;
+      }
+
+      let rhs_type = &project.types[rhs_type_id];
+      match rhs_type {
+        CheckedType::GenericEnumInstance(rhs_enum_id, rhs_args, _) => {
+          let rhs_args = rhs_args.clone();
+          if lhs_enum_id == rhs_enum_id {
+            let lhs_enum = &project.enums[*lhs_enum_id];
+            if rhs_args.len() != lhs_enum.generic_parameters.len() {
+              project.add_diagnostic(Diagnostic::error(
+                lhs_span,
+                format!(
+                  "mismatched number of generic parameters for {}",
+                  lhs_enum.name
+                ),
+              ));
+              return None;
+            }
+
+            let lhs_enum_generic_parameters = lhs_enum.generic_parameters.clone();
+
+            let mut idx = 0;
+
+            while idx < rhs_args.len() {
+              let lhs_arg_type_id = lhs_enum_generic_parameters[idx];
+              let rhs_arg_type_id = rhs_args[idx];
+
+              check_types_for_compat(
+                lhs_arg_type_id,
+                rhs_arg_type_id,
+                specializations,
+                span,
+                project,
+              );
+              idx += 1;
+            }
+          }
+        }
+        _ => {
+          if rhs_type_id != lhs_type_id {
+            project.add_diagnostic(Diagnostic::error(
+              span,
+              format!(
+                "type mismatch: expected {}, but got {}",
+                project.typename_for_type_id(lhs_type_id),
+                project.typename_for_type_id(rhs_type_id),
+              ),
+            ))
           }
         }
       }
