@@ -366,15 +366,20 @@ fn compile_function<'ctx>(
         .unwrap()
         .clone();
 
+      let mut previous_struct = None;
       let heap_struct = backend
         .builder
-        .build_alloca(struct_type, "structure")
+        .build_alloca(struct_type, "structure.addr")
         .expect("internal error: failed to build alloca");
+      let structure = backend
+        .builder
+        .build_load(struct_type, heap_struct, "structure")
+        .expect("internal error: failed to build load");
       for (idx, param) in function.params.iter().enumerate() {
         let param_type = compile_type(backend, project, param.type_id);
         let ptr = backend
           .builder
-          .build_alloca(param_type, param.name.as_str())
+          .build_alloca(param_type, &format!("{}.addr", param.name))
           .expect("internal error: failed to build alloca");
         backend
           .builder
@@ -389,30 +394,21 @@ fn compile_function<'ctx>(
           .builder
           .build_load(param_type, ptr, param.name.as_str())
           .expect("internal error: failed to build load");
-        backend
+        let structure = backend
           .builder
           .build_insert_value(
-            backend
-              .builder
-              .build_load(struct_type, heap_struct, "structure")
-              .expect("internal error: failed to build load")
-              .into_struct_value(),
+            previous_struct.unwrap_or(structure).into_struct_value(),
             value,
             idx as u32,
             param.name.as_str(),
           )
           .expect("internal error: failed to build insert value");
+        previous_struct = Some(structure.as_basic_value_enum());
       }
 
       backend
         .builder
-        .build_return(Some(
-          &backend
-            .builder
-            .build_load(struct_type, heap_struct, "structure")
-            .expect("internal error: failed to build load")
-            .into_struct_value(),
-        ))
+        .build_return(Some(&previous_struct.unwrap()))
         .expect("internal error: failed to build return");
     }
   }
