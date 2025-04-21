@@ -715,6 +715,37 @@ fn compile_expression<'ctx>(
       ))
     }
 
+    CheckedExpression::QuotedString(s, _) => {
+      let functions = backend.functions.borrow();
+      let string_constructor = functions
+        .get("String")
+        .expect("internal error: failed to get string constructor");
+
+      let string_const = backend
+        .builder
+        .build_call(
+          string_constructor.clone(),
+          &[
+            backend
+              .builder
+              .build_global_string_ptr(&s, "str")
+              .expect("internal error: failed to build global string")
+              .as_basic_value_enum()
+              .into(),
+            backend
+              .context
+              .i64_type()
+              .const_int(s.len() as u64, false)
+              .as_basic_value_enum()
+              .into(),
+          ],
+          "string",
+        )
+        .expect("internal error: failed to build call to string constructor");
+
+      Some(string_const.try_as_basic_value().unwrap_left())
+    }
+
     CheckedExpression::QuotedCString(s, _) => {
       let string_value: GlobalValue<'ctx> = unsafe {
         backend
