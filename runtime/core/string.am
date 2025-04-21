@@ -1,0 +1,6 @@
+type String = class {
+  let data: i8*;
+  let length: i64;
+
+  fn len(self) -> i64 = self.length;
+};

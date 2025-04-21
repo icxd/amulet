@@ -8,9 +8,7 @@ use crate::{
     ParsedCall, ParsedExpression, ParsedFunction, ParsedFunctionAttribute, ParsedNamespace,
     ParsedStatement, ParsedType, ParsedTypeDecl, ParsedTypeDeclData, UnaryOperator,
   },
-  compiler::{
-    BOOL_TYPE_ID, CCHAR_TYPE_ID, RAWPTR_TYPE_ID, STRING_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID,
-  },
+  compiler::{BOOL_TYPE_ID, CCHAR_TYPE_ID, RAWPTR_TYPE_ID, UNKNOWN_TYPE_ID, VOID_TYPE_ID},
   error::Diagnostic,
   span::Span,
 };
@@ -228,7 +226,12 @@ impl CheckedExpression {
       CheckedExpression::Nullptr(_, type_id) => *type_id,
       CheckedExpression::Boolean(_, _) => BOOL_TYPE_ID,
       CheckedExpression::NumericConstant(_, type_id, _) => *type_id,
-      CheckedExpression::QuotedString(_, _) => STRING_TYPE_ID,
+      CheckedExpression::QuotedString(_, _) => {
+        let string_type_decl_id = project
+          .find_type_decl_in_scope(0, "String")
+          .expect("internal error: unable to locate builtin `String` type");
+        project.find_or_add_type_id(CheckedType::TypeDecl(string_type_decl_id, Span::default()))
+      }
       CheckedExpression::QuotedCString(_, _) => {
         project.find_or_add_type_id(CheckedType::RawPtr(CCHAR_TYPE_ID, Span::default()))
       }
@@ -450,7 +453,6 @@ impl Project {
         CheckedType::Builtin(Span::default()), // USZ
         CheckedType::Builtin(Span::default()), // F32
         CheckedType::Builtin(Span::default()), // F64
-        CheckedType::Builtin(Span::default()), // String
         CheckedType::Builtin(Span::default()), // Bool
         CheckedType::Builtin(Span::default()), // CChar
         CheckedType::Builtin(Span::default()), // Rawptr
@@ -692,7 +694,6 @@ impl Project {
         crate::compiler::USZ_TYPE_ID => "usz".to_string(),
         crate::compiler::F32_TYPE_ID => "f32".to_string(),
         crate::compiler::F64_TYPE_ID => "f64".to_string(),
-        crate::compiler::STRING_TYPE_ID => "string".to_string(),
         crate::compiler::BOOL_TYPE_ID => "bool".to_string(),
         crate::compiler::CCHAR_TYPE_ID => "c_char".to_string(),
         crate::compiler::RAWPTR_TYPE_ID => "rawptr".to_string(),
@@ -2880,7 +2881,12 @@ pub fn typecheck_typename(
       "u64" => crate::compiler::U64_TYPE_ID,
       "u128" => crate::compiler::U128_TYPE_ID,
       "usz" => crate::compiler::USZ_TYPE_ID,
-      "string" => crate::compiler::STRING_TYPE_ID,
+      "string" => {
+        let string_type_decl_id = project
+          .find_type_decl_in_scope(0, "String")
+          .expect("internal error: unable to locate builtin `String` type");
+        project.find_or_add_type_id(CheckedType::TypeDecl(string_type_decl_id, *span))
+      }
       "bool" => crate::compiler::BOOL_TYPE_ID,
       "c_char" => crate::compiler::CCHAR_TYPE_ID,
       "rawptr" => crate::compiler::RAWPTR_TYPE_ID,

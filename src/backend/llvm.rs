@@ -1557,15 +1557,6 @@ fn compile_type<'ctx>(
       crate::compiler::USZ_TYPE_ID => BasicTypeEnum::IntType(backend.context.i64_type()),
       crate::compiler::F32_TYPE_ID => BasicTypeEnum::FloatType(backend.context.f32_type()),
       crate::compiler::F64_TYPE_ID => BasicTypeEnum::FloatType(backend.context.f64_type()),
-      crate::compiler::STRING_TYPE_ID => BasicTypeEnum::StructType(backend.context.struct_type(
-        &[
-          BasicTypeEnum::PointerType(unsafe {
-            PointerType::new(LLVMPointerType(backend.context.i8_type().as_type_ref(), 0))
-          }),
-          BasicTypeEnum::IntType(backend.context.i64_type()),
-        ],
-        false,
-      )),
       crate::compiler::BOOL_TYPE_ID => BasicTypeEnum::IntType(backend.context.bool_type()),
       crate::compiler::CCHAR_TYPE_ID => BasicTypeEnum::IntType(backend.context.i8_type()),
       crate::compiler::RAWPTR_TYPE_ID => {

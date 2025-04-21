@@ -29,7 +29,6 @@ pub(crate) const U128_TYPE_ID: usize = 12;
 pub(crate) const USZ_TYPE_ID: usize = 13;
 pub(crate) const F32_TYPE_ID: usize = 14;
 pub(crate) const F64_TYPE_ID: usize = 15;
-pub(crate) const STRING_TYPE_ID: usize = 16;
 pub(crate) const BOOL_TYPE_ID: usize = 17;
 pub(crate) const CCHAR_TYPE_ID: usize = 18;
 pub(crate) const RAWPTR_TYPE_ID: usize = 19;
