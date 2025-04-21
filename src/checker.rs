@@ -2071,6 +2071,8 @@ fn typecheck_expression(
 
     ParsedExpression::Boolean(value, span) => CheckedExpression::Boolean(*value, *span),
 
+    ParsedExpression::QuotedString(s, span) => CheckedExpression::QuotedString(s.clone(), *span),
+
     ParsedExpression::QuotedCString(s, span) => CheckedExpression::QuotedCString(s.clone(), *span),
 
     ParsedExpression::CharacterLiteral(c, span) => CheckedExpression::CharacterLiteral(*c, *span),
