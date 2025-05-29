@@ -1,0 +1,20 @@
+/// type=pass
+/// exitcode=10
+/// output=
+
+fn identity<T>(t: T) -> T = t;
+
+fn main() {
+  identity<i8>(10i8);
+  identity<i16>(10i16);
+  identity<i32>(10);
+  identity<i64>(10i64);
+  identity<isz>(10isz);
+  identity<u8>(10u8);
+  identity<u16>(10u16);
+  identity<u32>(10u32);
+  identity<u64>(10u64);
+  identity<usz>(10usz);
+  identity<bool>(true);
+  return identity<i32>(10);
+}

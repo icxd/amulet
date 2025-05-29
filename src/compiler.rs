@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use inkwell::{context::Context, targets::FileType};
+use log::debug;
 
 use crate::{
   backend::llvm::{compile_namespace, LLVMBackend},
@@ -32,7 +33,8 @@ pub(crate) const F64_TYPE_ID: usize = 15;
 pub(crate) const BOOL_TYPE_ID: usize = 17;
 pub(crate) const CCHAR_TYPE_ID: usize = 18;
 pub(crate) const RAWPTR_TYPE_ID: usize = 19;
-pub(crate) const COUNT_TYPE_IDS: usize = 20;
+pub(crate) const NEVER_TYPE_ID: usize = 20;
+pub(crate) const COUNT_TYPE_IDS: usize = 21;
 
 pub type FileId = usize;
 
@@ -112,6 +114,9 @@ impl Compiler {
 
     let mut tokenizer = Tokenizer::new(self.files.len() - 1, contents.clone());
     let tokens = tokenizer.tokenize().map_err(|err| vec![err])?;
+    for token in &tokens {
+      debug!("{:?}", token)
+    }
 
     let mut parser = Parser::new(self.files.len() - 1, tokens);
     let parsed_namespace = parser.parse().map_err(|err| vec![err])?;
@@ -156,7 +161,7 @@ impl Compiler {
     backend.debug_info_builder.finalize();
 
     if self.opts.emit_llvm_ir {
-    backend.module.print_to_file(path.clone()).unwrap();
+      backend.module.print_to_file(path.clone()).unwrap();
     }
 
     if let Err(err) = backend.module.verify() {

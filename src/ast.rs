@@ -400,6 +400,7 @@ pub enum ParsedStatement {
   Break(Span),
   Continue(Span),
   Return(ParsedExpression, Span),
+  Yield(ParsedExpression, Span),
 
   Expression(ParsedExpression),
 }
@@ -414,6 +415,7 @@ impl ParsedStatement {
       ParsedStatement::Break(span) => *span,
       ParsedStatement::Continue(span) => *span,
       ParsedStatement::Return(_, span) => *span,
+      ParsedStatement::Yield(_, span) => *span,
       ParsedStatement::Expression(expr) => expr.span(),
     }
   }
@@ -438,6 +440,8 @@ pub enum ParsedExpression {
     Span,
   ),
   Grouped(Box<ParsedExpression>, Span),
+  Range(Box<ParsedExpression>, Box<ParsedExpression>, Span),
+  SizeOf(Box<ParsedExpression>, Span),
 
   IndexedExpression(Box<ParsedExpression>, Box<ParsedExpression>, Span),
   IndexedStruct(Box<ParsedExpression>, String, Span),
@@ -455,6 +459,13 @@ pub enum ParsedExpression {
     span: Span,
   },
 
+  Switch {
+    condition: Box<ParsedExpression>,
+    cases: Vec<(ParsedExpression, ParsedBlock)>,
+    default: Option<ParsedBlock>,
+    span: Span,
+  },
+
   Todo(Span),
   Unreachable(Span),
 
@@ -467,6 +478,7 @@ pub enum ParsedType {
   GenericType(String, Vec<ParsedType>, Span),
   RawPointer(Box<ParsedType>, Span),
   Optional(Box<ParsedType>, Span),
+  Slice(Box<ParsedType>, Option<NumericConstant>, Span),
   Empty,
 }
 
@@ -526,12 +538,15 @@ impl ParsedExpression {
       ParsedExpression::UnaryOp(_, _, span) => *span,
       ParsedExpression::BinaryOp(_, _, _, span) => *span,
       ParsedExpression::Grouped(_, span) => *span,
+      ParsedExpression::Range(_, _, span) => *span,
+      ParsedExpression::SizeOf(_, span) => *span,
       ParsedExpression::IndexedExpression(_, _, span) => *span,
       ParsedExpression::IndexedStruct(_, _, span) => *span,
       ParsedExpression::Call(_, span) => *span,
       ParsedExpression::MethodCall(_, _, span) => *span,
       ParsedExpression::Operator(_, span) => *span,
       ParsedExpression::InlineAsm { span, .. } => *span,
+      ParsedExpression::Switch { span, .. } => *span,
       ParsedExpression::Todo(span) => *span,
       ParsedExpression::Unreachable(span) => *span,
       ParsedExpression::Garbage(span) => *span,

@@ -1,0 +1,37 @@
+enum SimpleColor : i32 {
+  Black,
+  Red = 0xff0000,
+  Yellow = 0xffff00,
+  Green = 0x00ff00,
+  Cyan = 0x00ffff,
+  Blue = 0x0000ff,
+  Magenta = 0xff00ff,
+  White = 0xffffff,
+}
+
+enum Color {
+  Hex(string),
+  Rgb {
+    red: u8, 
+    green: u8, 
+    blue: u8 
+  },
+  Simple(SimpleColor),
+}
+
+fn main() -> i32 {
+  let color = SimpleColor.Black;
+  let color2 = Color.Simple(SimpleColor.Red);
+  return switch color2 {
+    case Hex(code) {
+      let r = code[0..2].to_i32();
+      let g = code[2..4].to_i32();
+      let b = code[4..6].to_i32();
+      yield r + g + b;
+    }
+    // Using `=` instead of a block is the same as writing
+    // `case Simple(color) { yield color as i32; }`, it's just a shorthand.
+    case Rgb(red, green, blue) = red + green + blue;
+    case Simple(color) = color as i32;
+  };
+}

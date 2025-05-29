@@ -4,8 +4,9 @@ use clap::{
   builder::{OsStr, PossibleValue},
   Parser, ValueEnum,
 };
+use colored::Colorize;
 use compiler::Compiler;
-use error::display_error;
+use lyneate::Report;
 
 pub mod ast;
 pub mod backend;
@@ -13,6 +14,7 @@ pub mod checker;
 pub mod compiler;
 pub mod error;
 pub mod ide;
+pub mod ir;
 pub mod parser;
 pub mod span;
 pub mod tokenizer;
@@ -115,7 +117,7 @@ fn main() -> ExitCode {
       }
       let source = &compiler.files[compiler.files.len() - 1].1;
       for error in errors {
-        display_error(&error, source.as_str(), path.as_str());
+        error.display(&source);
       }
 
       return ExitCode::FAILURE;

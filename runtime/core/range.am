@@ -1,0 +1,11 @@
+// type Range<T> = class {
+//   let start: T;
+//   let end: T;
+//   let current: T;
+// };
+
+type Range = class {
+  let start: usz;
+  let end: usz;
+  let current: usz;
+};

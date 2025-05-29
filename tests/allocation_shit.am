@@ -1,0 +1,7 @@
+native fn malloc(size: usz) -> rawptr;
+
+fn allocate<T>() -> T* = malloc(sizeof T) as T*;
+
+fn main() -> i32 {
+  return 0;
+}

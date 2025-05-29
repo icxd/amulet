@@ -1,0 +1,4 @@
+fn main() {
+  let a = c"helloooo";
+  a[1usz..2usz];
+}

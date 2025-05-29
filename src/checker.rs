@@ -206,8 +206,11 @@ pub enum CheckedExpression {
     Span,
   ),
 
+  Range(Box<CheckedExpression>, Box<CheckedExpression>, TypeId, Span),
+
   IndexedExpression(Box<CheckedExpression>, Box<CheckedExpression>, TypeId, Span),
   IndexedStruct(Box<CheckedExpression>, String, TypeDeclId, TypeId, Span),
+  IndexedEnum(EnumId, String, Vec<CheckedExpression>, TypeId, Span),
 
   Call(CheckedCall, TypeId, Span),
   MethodCall(Box<CheckedExpression>, CheckedCall, TypeId, Span),
@@ -217,6 +220,13 @@ pub enum CheckedExpression {
     asm: Vec<String>,
     bindings: Vec<CheckedInlineAsmBinding>,
     clobbers: Vec<CheckedInlineAsmOperand>,
+    type_id: TypeId,
+    span: Span,
+  },
+  Switch {
+    value: Box<CheckedExpression>,
+    cases: Vec<(Box<CheckedExpression>, CheckedBlock)>,
+    default: Option<CheckedBlock>,
     type_id: TypeId,
     span: Span,
   },
@@ -244,11 +254,14 @@ impl CheckedExpression {
       CheckedExpression::NamespacedVariable(_, var, _) => var.type_id,
       CheckedExpression::UnaryOp(_, _, type_id, _) => *type_id,
       CheckedExpression::BinaryOp(_, _, _, type_id, _) => *type_id,
+      CheckedExpression::Range(_, _, type_id, _) => *type_id,
       CheckedExpression::IndexedExpression(_, _, type_id, _) => *type_id,
       CheckedExpression::IndexedStruct(_, _, _, type_id, _) => *type_id,
+      CheckedExpression::IndexedEnum(_, _, _, type_id, _) => *type_id,
       CheckedExpression::Call(_, type_id, _) => *type_id,
       CheckedExpression::MethodCall(_, _, type_id, _) => *type_id,
       CheckedExpression::InlineAsm { type_id, .. } => *type_id,
+      CheckedExpression::Switch { type_id, .. } => *type_id,
       CheckedExpression::Garbage(_) => UNKNOWN_TYPE_ID,
     }
   }
@@ -320,8 +333,19 @@ pub enum CheckedStatement {
   Break(Span),
   Continue(Span),
   Return(CheckedExpression),
+  Yield(CheckedExpression),
 
   Expression(CheckedExpression),
+}
+
+impl CheckedStatement {
+  pub(crate) fn type_id(&self, project: &mut Project) -> TypeId {
+    use CheckedStatement::*;
+    match self {
+      Return(expr) | Yield(expr) => expr.type_id(project),
+      _ => UNKNOWN_TYPE_ID,
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -337,6 +361,18 @@ impl CheckedBlock {
       definitely_returns: false,
     }
   }
+
+  pub(crate) fn type_id(&self, project: &mut Project) -> TypeId {
+    if self.definitely_returns {
+      if let Some(last) = self.stmts.last() {
+        last.type_id(project)
+      } else {
+        VOID_TYPE_ID
+      }
+    } else {
+      VOID_TYPE_ID
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +384,7 @@ pub enum CheckedType {
   TypeDecl(TypeDeclId, Span),
   Enum(EnumId, Span),
   RawPtr(TypeId, Span),
+  Slice(TypeId, usize, Span),
 }
 
 impl PartialEq for CheckedType {
@@ -364,6 +401,9 @@ impl PartialEq for CheckedType {
       }
       (CheckedType::Enum(a, _), CheckedType::Enum(b, _)) => a == b,
       (CheckedType::RawPtr(a, _), CheckedType::RawPtr(b, _)) => a == b,
+      (CheckedType::Slice(a, a_size, _), CheckedType::Slice(b, b_size, _)) => {
+        a == b && a_size == b_size
+      }
       _ => false,
     }
   }
@@ -379,6 +419,7 @@ impl CheckedType {
       CheckedType::TypeDecl(_, span) => *span,
       CheckedType::Enum(_, span) => *span,
       CheckedType::RawPtr(_, span) => *span,
+      CheckedType::Slice(_, _, span) => *span,
     }
   }
 }
@@ -421,6 +462,13 @@ impl CheckedTypeKind {
       _ => None,
     }
   }
+
+  fn as_class(&self) -> Option<&CheckedClass> {
+    match self {
+      CheckedTypeKind::Class(class) => Some(class),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -447,6 +495,17 @@ pub enum CheckedEnumVariant {
   WithValue(String, CheckedExpression, Span),
   TupleLike(String, Vec<TypeId>, Span),
   StructLike(String, Vec<CheckedVarDecl>, Span),
+}
+
+impl CheckedEnumVariant {
+  pub fn name(&self) -> String {
+    match self {
+      CheckedEnumVariant::Untyped(name, _) => name.clone(),
+      CheckedEnumVariant::WithValue(name, _, _) => name.clone(),
+      CheckedEnumVariant::TupleLike(name, _, _) => name.clone(),
+      CheckedEnumVariant::StructLike(name, _, _) => name.clone(),
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -766,6 +825,7 @@ impl Project {
         crate::compiler::BOOL_TYPE_ID => "bool".to_string(),
         crate::compiler::CCHAR_TYPE_ID => "c_char".to_string(),
         crate::compiler::RAWPTR_TYPE_ID => "rawptr".to_string(),
+        crate::compiler::NEVER_TYPE_ID => "never".to_string(),
         _ => "unknown".to_string(),
       },
       CheckedType::TypeDecl(type_decl_id, _) => {
@@ -810,6 +870,9 @@ impl Project {
       }
       CheckedType::TypeVariable(name, _, _) => name.clone(),
       CheckedType::RawPtr(type_id, _) => format!("{}*", self.typename_for_type_id(*type_id)),
+      CheckedType::Slice(type_id, size, _) => {
+        format!("{}[{size}]", self.typename_for_type_id(*type_id))
+      }
     }
   }
 
@@ -842,32 +905,45 @@ impl Project {
   }
 }
 
-fn mangle_name(
-  resolved_namespaces: &[ResolvedNamespace],
-  name: &String,
-  type_args: &[TypeId],
-  project: &mut Project,
-) -> String {
+pub(crate) fn mangle_type(type_id: TypeId, project: &mut Project) -> String {
   let mut mangled_name = "_".to_string();
 
-  for namespace in resolved_namespaces.iter() {
-    let namespace_name = namespace.name.clone();
-    let namespace_name_len = namespace_name.len();
-    mangled_name.push('N');
-    mangled_name.push_str(&namespace_name_len.to_string());
-    mangled_name.push_str(&namespace_name);
+  match &project.types[type_id] {
+    CheckedType::Builtin(_) => match type_id {
+      crate::compiler::VOID_TYPE_ID => mangled_name.push_str("void"),
+      crate::compiler::I8_TYPE_ID => mangled_name.push_str("i8"),
+      crate::compiler::I16_TYPE_ID => mangled_name.push_str("i16"),
+      crate::compiler::I32_TYPE_ID => mangled_name.push_str("i32"),
+      crate::compiler::I64_TYPE_ID => mangled_name.push_str("i64"),
+      crate::compiler::I128_TYPE_ID => mangled_name.push_str("i128"),
+      crate::compiler::ISZ_TYPE_ID => mangled_name.push_str("isz"),
+      crate::compiler::U8_TYPE_ID => mangled_name.push_str("u8"),
+      crate::compiler::U16_TYPE_ID => mangled_name.push_str("u16"),
+      crate::compiler::U32_TYPE_ID => mangled_name.push_str("u32"),
+      crate::compiler::U64_TYPE_ID => mangled_name.push_str("u64"),
+      crate::compiler::U128_TYPE_ID => mangled_name.push_str("u128"),
+      crate::compiler::USZ_TYPE_ID => mangled_name.push_str("usz"),
+      crate::compiler::F32_TYPE_ID => mangled_name.push_str("f32"),
+      crate::compiler::F64_TYPE_ID => mangled_name.push_str("f64"),
+      crate::compiler::BOOL_TYPE_ID => mangled_name.push_str("bool"),
+      crate::compiler::CCHAR_TYPE_ID => mangled_name.push_str("c_char"),
+      crate::compiler::RAWPTR_TYPE_ID => mangled_name.push_str("rawptr"),
+      _ => todo!(),
+    },
+    _ => todo!(),
   }
 
-  mangled_name.push_str(&name.len().to_string());
-  mangled_name.push_str(name);
+  mangled_name
+}
 
-  if !type_args.is_empty() {
-    for type_arg in type_args.iter() {
-      let type_name = project.typename_for_type_id(*type_arg);
-      let type_name_len = type_name.len();
-      mangled_name.push_str(&type_name_len.to_string());
-      mangled_name.push_str(&type_name);
-    }
+fn mangle_name(function: &CheckedFunction, project: &mut Project) -> String {
+  let mut mangled_name = "_".to_string();
+
+  mangled_name.push_str(&function.name.len().to_string());
+  mangled_name.push_str(&function.name.clone());
+
+  for param in function.params.iter() {
+    mangled_name.push_str(&mangle_type(param.type_id, project));
   }
 
   mangled_name
@@ -967,6 +1043,13 @@ pub fn typecheck_namespace(
     project.current_function_index = Some(i + project_function_len);
     typecheck_function(function, scope_id, project);
     project.current_function_index = None;
+  }
+
+  let fns = project.functions.clone();
+  for i in 0..fns.len() {
+    if !fns[i].generic_parameters.is_empty() {
+      project.functions.remove(i);
+    }
   }
 }
 
@@ -2044,8 +2127,7 @@ fn typecheck_method(function: &ParsedFunction, project: &mut Project, type_decl_
 
 fn statement_definitely_returns(stmt: &CheckedStatement) -> bool {
   match stmt {
-    CheckedStatement::Return(_) => true,
-    CheckedStatement::Break(_) => true,
+    CheckedStatement::Return(_) | CheckedStatement::Yield(_) | CheckedStatement::Break(_) => true,
     CheckedStatement::Block(block) => block.definitely_returns,
     CheckedStatement::While { block, .. } => block.definitely_returns,
     CheckedStatement::Loop(block) => block.definitely_returns,
@@ -2062,6 +2144,46 @@ fn statement_definitely_returns(stmt: &CheckedStatement) -> bool {
     _ => false,
   }
 }
+
+// fn substitute_typevars_in_type_decl(
+//   type_decl_id: TypeDeclId,
+//   specializations: &HashMap<TypeId, TypeId>,
+//   span: Span,
+//   project: &mut Project,
+// ) {
+//   let type_decl = &mut project.type_decls[type_decl_id];
+//   let Some(class) = type_decl.kind.as_class() else {
+//     unimplemented!("{:?}", type_decl.kind);
+//   };
+
+//   let fields = class.fields.clone();
+
+//   let mut new_fields = vec![];
+//   for index in 0..fields.len() {
+//     let var = fields[index].clone();
+//     let type_id = substitute_typevars_in_type(var.type_id, specializations, project);
+
+//     new_fields.push(CheckedVarDecl {
+//       name: var.name.clone(),
+//       type_id,
+//       mutable: var.mutable,
+//       span: var.span,
+//     });
+//   }
+
+//   // let type_decl_id = project.type_decls.len();
+//   project.type_decls.push(CheckedTypeDecl {
+//     name: type_decl.name.clone(),
+//     generic_parameters: vec![],
+//     kind: CheckedTypeKind::Class(CheckedClass {
+//       implements: class.implements.clone(),
+//       fields: new_fields,
+//       methods: class.methods.clone(),
+//     }),
+//     scope_id: type_decl.scope_id,
+//     linkage: type_decl.linkage,
+//   });
+// }
 
 fn typecheck_block(block: &ParsedBlock, scope_id: ScopeId, project: &mut Project) -> CheckedBlock {
   let mut checked_block = CheckedBlock::new();
@@ -2171,6 +2293,19 @@ fn typecheck_statement(
     ParsedStatement::Continue(span) => CheckedStatement::Continue(*span),
 
     ParsedStatement::Return(expr, _span) => {
+      let expr = typecheck_expression(
+        expr,
+        scope_id,
+        project
+          .current_function_index
+          .map(|i| project.functions[i].return_type_id),
+        project,
+      );
+
+      CheckedStatement::Return(expr)
+    }
+
+    ParsedStatement::Yield(expr, _span) => {
       let expr = typecheck_expression(
         expr,
         scope_id,
@@ -2340,6 +2475,39 @@ fn typecheck_call(
       generic_substitutions.insert(typevar_type_id, checked_type);
     }
 
+    {
+      if !callee.generic_parameters.is_empty() {
+        let mut function = callee.clone();
+        function.return_type_id =
+          substitute_typevars_in_type(function.return_type_id, &generic_substitutions, project);
+        for param in &mut function.params {
+          param.type_id =
+            substitute_typevars_in_type(param.type_id, &generic_substitutions, project);
+        }
+        function.generic_parameters = vec![];
+
+        function.name = mangle_name(&function, project);
+
+        substitute_typevars_in_block(&mut function.block, &generic_substitutions, project);
+
+        if project
+          .find_function_in_scope(callee_scope_id, &function.name)
+          .is_none()
+        {
+          let function_id = project.functions.len();
+          project.functions.push(function.clone());
+          project.add_function_to_scope(
+            callee_scope_id,
+            function.name.clone(),
+            function_id,
+            function.name_span,
+          );
+        }
+
+        // dbg!(&function);
+      }
+    }
+
     if let Some(this_expr) = this_expr {
       let type_id = this_expr.type_id(project);
       let param_type = &project.types[type_id];
@@ -2452,9 +2620,20 @@ fn typecheck_call(
     }
   }
 
+  let name = if !type_args.is_empty() {
+    let mut mangled_name = format!("_{}{}", call.name.len(), call.name.clone());
+    for arg in checked_args.clone() {
+      let type_id = arg.type_id(project);
+      mangled_name.push_str(&mangle_type(type_id, project));
+    }
+    mangled_name
+  } else {
+    call.name.clone()
+  };
+
   CheckedCall {
     namespace: resolved_namespaces,
-    name: call.name.clone(),
+    name,
     args: checked_args,
     type_args,
     linkage,
@@ -2578,6 +2757,52 @@ fn typecheck_expression(
       }
     }
 
+    ParsedExpression::Range(lhs, rhs, span) => {
+      let mut checked_lhs = typecheck_expression(lhs, scope_id, None, project);
+      let lhs_type_id = checked_lhs.type_id(project);
+      try_promote_constant_expr_to_type(lhs_type_id, &mut checked_lhs, span, project);
+
+      let mut checked_rhs = typecheck_expression(rhs, scope_id, None, project);
+      let rhs_type_id = checked_rhs.type_id(project);
+      try_promote_constant_expr_to_type(rhs_type_id, &mut checked_rhs, span, project);
+
+      if lhs_type_id != rhs_type_id {
+        project.add_diagnostic(Diagnostic::error(
+          *span,
+          format!(
+            "range bounds must be of the same type, found `{}` and `{}`",
+            project.typename_for_type_id(lhs_type_id),
+            project.typename_for_type_id(rhs_type_id)
+          ),
+        ));
+      }
+      if !is_integer(lhs_type_id) {
+        project.add_diagnostic(Diagnostic::error(
+          *span,
+          format!(
+            "range bounds must be integers, found `{}`",
+            project.typename_for_type_id(lhs_type_id)
+          ),
+        ));
+      }
+
+      let CheckedExpression::NumericConstant(ref lhs, _, _) = checked_lhs else {
+        unreachable!()
+      };
+      let lhs = lhs.integer_constant().unwrap().to_usize();
+
+      let CheckedExpression::NumericConstant(ref rhs, _, _) = checked_rhs else {
+        unreachable!()
+      };
+      let rhs = rhs.integer_constant().unwrap().to_usize();
+
+      let type_id = project.find_or_add_type_id(CheckedType::Slice(lhs_type_id, rhs - lhs, *span));
+
+      let type_id = unify_with_type_hint(project, &type_id);
+
+      CheckedExpression::Range(Box::new(checked_lhs), Box::new(checked_rhs), type_id, *span)
+    }
+
     ParsedExpression::Call(call, span) => {
       let checked_call = typecheck_call(call, scope_id, span, project, None, None, type_hint_id);
 
@@ -2587,6 +2812,40 @@ fn typecheck_expression(
     }
 
     ParsedExpression::MethodCall(expr, call, span) => {
+      if let ParsedExpression::Var(enum_name, _) = *expr.clone() {
+        let enum_id = project.find_enum_in_scope(scope_id, &enum_name);
+        if let Some(enum_id) = enum_id {
+          let enum_ = &project.enums[enum_id];
+          for variant in enum_.variants.iter() {
+            if variant.name() == call.name {
+              let variant_name = variant.clone().name();
+              let type_id = project.find_type_in_scope(scope_id, &enum_name);
+              if let Some(type_id) = type_id {
+                let args = call.args.clone();
+                let mut checked_args = vec![];
+                for arg in args.iter() {
+                  let expr = typecheck_expression(arg, scope_id, None, project);
+                  checked_args.push(expr);
+                }
+                return CheckedExpression::IndexedEnum(
+                  enum_id,
+                  variant_name,
+                  checked_args,
+                  type_id,
+                  *span,
+                );
+              }
+            }
+          }
+
+          project.add_diagnostic(Diagnostic::error(
+            *span,
+            format!("unknown variant {} in {}", call.name, enum_name),
+          ));
+          return CheckedExpression::Garbage(*span);
+        }
+      }
+
       let checked_expr = typecheck_expression(expr, scope_id, None, project);
       let checked_expr_type_id = checked_expr.type_id(project);
 
@@ -2740,6 +2999,42 @@ fn typecheck_expression(
     }
 
     ParsedExpression::IndexedStruct(expr, name, span) => {
+      if let ParsedExpression::Var(var_name, _) = *expr.clone() {
+        if let Some(enum_id) = project.find_enum_in_scope(scope_id, &var_name) {
+          let r#enum = &project.enums[enum_id];
+          let span = r#enum.span;
+
+          let Some(type_id) = project.find_type_in_scope(scope_id, &r#enum.name) else {
+            project.add_diagnostic(Diagnostic::error(span, format!("")));
+            return CheckedExpression::Garbage(span);
+          };
+
+          for member in &r#enum.variants {
+            let (member_name, member_span) = match member {
+              CheckedEnumVariant::Untyped(name, span) => (name, span),
+              CheckedEnumVariant::WithValue(name, _, span) => (name, span),
+              CheckedEnumVariant::TupleLike(name, _, span) => (name, span),
+              CheckedEnumVariant::StructLike(name, _, span) => (name, span),
+            };
+            if member_name == name {
+              return CheckedExpression::IndexedEnum(
+                enum_id,
+                name.to_string(),
+                vec![],
+                type_id,
+                *member_span,
+              );
+            }
+          }
+
+          project.add_diagnostic(Diagnostic::error(
+            span,
+            format!("unknown member of enum: {}.{}", r#enum.name, name),
+          ));
+          return CheckedExpression::Garbage(span);
+        }
+      }
+
       let checked_expr = typecheck_expression(expr, scope_id, None, project);
 
       let checked_expr_type_id = checked_expr.type_id(project);
@@ -2850,6 +3145,64 @@ fn typecheck_expression(
       }
     }
 
+    ParsedExpression::Switch {
+      condition,
+      cases,
+      default,
+      span,
+    } => {
+      let checked_condition = typecheck_expression(&condition, scope_id, None, project);
+      let condition_type_id = checked_condition.type_id(project);
+
+      let mut type_id = None;
+      let mut checked_cases = vec![];
+      for (case, block) in cases.iter() {
+        let checked_case = typecheck_expression(&case, scope_id, None, project);
+        let case_type_id = checked_case.type_id(project);
+
+        if case_type_id != condition_type_id {
+          project.add_diagnostic(Diagnostic::error(
+            case.span(),
+            format!(
+              "type mismatch: expected {}, but got {}",
+              project.typename_for_type_id(condition_type_id),
+              project.typename_for_type_id(case_type_id),
+            ),
+          ));
+        }
+
+        let checked_block = typecheck_block(block, scope_id, project);
+        let block_type_id = checked_block.type_id(project);
+
+        if let Some(type_id) = type_id {
+          if check_types_for_compat(block_type_id, type_id, &mut HashMap::new(), *span, project)
+            .is_none()
+          {
+            project.add_diagnostic(Diagnostic::error(
+              case.span(),
+              format!(
+                "type mismatch: expected {}, but got {}",
+                project.typename_for_type_id(type_id),
+                project.typename_for_type_id(block_type_id),
+              ),
+            ));
+          }
+        } else {
+          type_id = Some(block_type_id);
+        }
+
+        checked_cases.push((Box::new(checked_case), checked_block));
+      }
+
+      CheckedExpression::Switch {
+        value: Box::new(checked_condition),
+        cases: checked_cases,
+        default: None,
+        type_id: type_id.unwrap_or(UNKNOWN_TYPE_ID),
+        span: *span,
+      }
+    }
+
     ParsedExpression::Grouped(inner, _) => {
       typecheck_expression(&*inner, scope_id, type_hint_id, project)
     }
@@ -2916,6 +3269,31 @@ fn typecheck_unary_operation(
                 ),
               ));
             }
+          }
+        }
+
+        (CheckedType::Enum(enum_id, _), _) => {
+          let enum_ = &project.enums[*enum_id];
+          if let Some(underlying_type_id) = enum_.underlying_type_id {
+            if underlying_type_id != type_id {
+              project.add_diagnostic(Diagnostic::error(
+                span,
+                format!(
+                  "cannot cast {} to {}",
+                  project.typename_for_type_id(expr_type_id),
+                  project.typename_for_type_id(type_id),
+                ),
+              ));
+            }
+          } else {
+            project.add_diagnostic(Diagnostic::error(
+              span,
+              format!(
+                "cannot cast {} to {}",
+                project.typename_for_type_id(expr_type_id),
+                project.typename_for_type_id(type_id),
+              ),
+            ));
           }
         }
 
@@ -3107,6 +3485,113 @@ fn typecheck_binary_operator(
   type_id
 }
 
+fn substitute_typevars_in_expression(
+  expr: &mut CheckedExpression,
+  specializations: &HashMap<TypeId, TypeId>,
+  project: &mut Project,
+) {
+  match expr {
+    CheckedExpression::Null(span, _) => todo!(),
+    CheckedExpression::Nullptr(span, type_id) => {
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+    }
+    CheckedExpression::Boolean(_, span) => todo!(),
+    CheckedExpression::NumericConstant(numeric_constant, _, span) => todo!(),
+    CheckedExpression::QuotedString(_, span) => todo!(),
+    CheckedExpression::QuotedCString(_, span) => todo!(),
+    CheckedExpression::CharacterLiteral(_, span) => todo!(),
+    CheckedExpression::Variable(var, span) => {
+      var.type_id = substitute_typevars_in_type(var.type_id, specializations, project);
+    }
+    CheckedExpression::NamespacedVariable(checked_namespaces, checked_var_decl, span) => todo!(),
+    CheckedExpression::UnaryOp(expr, op, type_id, _) => {
+      substitute_typevars_in_expression(expr, specializations, project);
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+      match op {
+        CheckedUnaryOperator::As(type_id) => {
+          *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+        }
+        _ => {}
+      }
+    }
+    CheckedExpression::BinaryOp(lhs, _, rhs, type_id, _) => {
+      substitute_typevars_in_expression(lhs, specializations, project);
+      substitute_typevars_in_expression(rhs, specializations, project);
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+    }
+    CheckedExpression::Range(lhs, rhs, type_id, _) => {
+      substitute_typevars_in_expression(lhs, specializations, project);
+      substitute_typevars_in_expression(rhs, specializations, project);
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+    }
+    CheckedExpression::IndexedExpression(expr, index, type_id, _) => {
+      substitute_typevars_in_expression(expr, specializations, project);
+      substitute_typevars_in_expression(index, specializations, project);
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+    }
+    CheckedExpression::IndexedStruct(checked_expression, _, _, _, span) => todo!(),
+    CheckedExpression::IndexedEnum(_, _, _, _, span) => todo!(),
+    CheckedExpression::Call(_, type_id, _) => {
+      *type_id = substitute_typevars_in_type(*type_id, specializations, project);
+    }
+    CheckedExpression::MethodCall(checked_expression, checked_call, _, span) => todo!(),
+    CheckedExpression::InlineAsm {
+      volatile,
+      asm,
+      bindings,
+      clobbers,
+      type_id,
+      span,
+    } => todo!(),
+    CheckedExpression::Switch {
+      value,
+      cases,
+      default,
+      type_id,
+      span,
+    } => todo!(),
+    CheckedExpression::Garbage(span) => todo!(),
+  }
+}
+
+fn substitute_typevars_in_statement(
+  statement: &mut CheckedStatement,
+  specializations: &HashMap<TypeId, TypeId>,
+  project: &mut Project,
+) {
+  match statement {
+    CheckedStatement::VarDecl(var, expr) => {
+      var.type_id = substitute_typevars_in_type(var.type_id, specializations, project);
+      substitute_typevars_in_expression(expr, specializations, project);
+    }
+    CheckedStatement::Block(checked_block) => todo!(),
+    CheckedStatement::If {
+      condition,
+      then_block,
+      else_block,
+    } => todo!(),
+    CheckedStatement::While { condition, block } => todo!(),
+    CheckedStatement::Loop(checked_block) => todo!(),
+    CheckedStatement::Break(span) => todo!(),
+    CheckedStatement::Continue(span) => todo!(),
+    CheckedStatement::Return(expr) => {
+      substitute_typevars_in_expression(expr, specializations, project);
+    }
+    CheckedStatement::Yield(checked_expression) => todo!(),
+    CheckedStatement::Expression(checked_expression) => todo!(),
+  }
+}
+
+fn substitute_typevars_in_block(
+  block: &mut CheckedBlock,
+  specializations: &HashMap<TypeId, TypeId>,
+  project: &mut Project,
+) {
+  for statement in &mut block.stmts {
+    substitute_typevars_in_statement(statement, specializations, project);
+  }
+}
+
 fn substitute_typevars_in_type(
   type_id: TypeId,
   specializations: &HashMap<TypeId, TypeId>,
@@ -3200,6 +3685,12 @@ fn substitute_typevars_in_type_helper(
         return project
           .find_or_add_type_id(CheckedType::GenericEnumInstance(enum_id, new_args, span));
       }
+    }
+
+    CheckedType::RawPtr(inner_type_id, span) => {
+      let span = *span;
+      let inner_type_id = substitute_typevars_in_type(*inner_type_id, specializations, project);
+      return project.find_or_add_type_id(CheckedType::RawPtr(inner_type_id, span));
     }
 
     _ => {}
@@ -3525,6 +4016,7 @@ pub fn typecheck_typename(
       "bool" => crate::compiler::BOOL_TYPE_ID,
       "c_char" => crate::compiler::CCHAR_TYPE_ID,
       "rawptr" => crate::compiler::RAWPTR_TYPE_ID,
+      "never" => crate::compiler::NEVER_TYPE_ID,
       x => {
         let type_id = project.find_type_in_scope(scope_id, x);
         match type_id {
@@ -3573,6 +4065,27 @@ pub fn typecheck_typename(
         *span,
       ));
 
+      type_id
+    }
+    ParsedType::Slice(inner, size, span) => {
+      let Some(size) = size else {
+        todo!("cannot infer size of slice");
+      };
+
+      if !is_integer(size.type_id()) {
+        project.add_diagnostic(Diagnostic::error(
+          *span,
+          "slice size need to be an integer".into(),
+        ));
+        return UNKNOWN_TYPE_ID;
+      }
+
+      let inner_type_id = typecheck_typename(inner, scope_id, project);
+      let type_id = project.find_or_add_type_id(CheckedType::Slice(
+        inner_type_id,
+        size.integer_constant().unwrap().to_usize(),
+        *span,
+      ));
       type_id
     }
     ParsedType::Empty => UNKNOWN_TYPE_ID,

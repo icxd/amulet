@@ -1,0 +1,16 @@
+/// type=pass
+/// exitcode=10
+/// output=
+
+native fn malloc(size: usz) -> rawptr;
+
+fn allocate<T>(size: usz) -> T* {
+  let ptr = malloc(size);
+  return ptr as T*;
+}
+
+fn main() -> i32 {
+  mut a = allocate<i32>(4);
+  *a = 10;
+  return *a;
+}

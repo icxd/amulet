@@ -23,6 +23,7 @@ pub enum TokenKind {
   KwBind,
   KwBreak, 
   KwCallConv, 
+  KwCase,
   KwClass,
   KwClobber,
   KwConst, 
@@ -47,16 +48,18 @@ pub enum TokenKind {
   KwReg,
   KwReturn,
   KwStatic,
+  KwSwitch,
   KwTodo,
   KwType,
   KwUnreachable, 
   KwVolatile,
   KwWhile,
+  KwYield,
   
   OpenParen, CloseParen,
   OpenBracket, CloseBracket,
   OpenBrace, CloseBrace,
-  Period, Comma,
+  Period, PeriodPeriod, Comma,
   Colon, Semicolon,
   Arrow,
 
@@ -93,6 +96,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::KwBind => "bind",
         TokenKind::KwBreak => "break",
         TokenKind::KwCallConv => "callconv",
+        TokenKind::KwCase => "case",
         TokenKind::KwClass => "class",
         TokenKind::KwClobber => "clobber",
         TokenKind::KwConst => "const",
@@ -117,11 +121,13 @@ impl std::fmt::Display for TokenKind {
         TokenKind::KwReg => "reg",
         TokenKind::KwReturn => "return",
         TokenKind::KwStatic => "static",
+        TokenKind::KwSwitch => "switch",
         TokenKind::KwTodo => "todo",
         TokenKind::KwType => "type",
         TokenKind::KwUnreachable => "unreachable",
         TokenKind::KwVolatile => "volatile",
         TokenKind::KwWhile => "while",
+        TokenKind::KwYield => "yield",
         TokenKind::OpenParen => "(",
         TokenKind::CloseParen => ")",
         TokenKind::OpenBracket => "[",
@@ -129,6 +135,7 @@ impl std::fmt::Display for TokenKind {
         TokenKind::OpenBrace => "{",
         TokenKind::CloseBrace => "}",
         TokenKind::Period => ".",
+        TokenKind::PeriodPeriod => "..",
         TokenKind::Comma => ",",
         TokenKind::Colon => ":",
         TokenKind::Semicolon => ";",
@@ -264,6 +271,7 @@ impl Tokenizer {
               "bind" => TokenKind::KwBind,
               "break" => TokenKind::KwBreak,
               "callconv" => TokenKind::KwCallConv,
+              "case" => TokenKind::KwCase,
               "class" => TokenKind::KwClass,
               "clobber" => TokenKind::KwClobber,
               "const" => TokenKind::KwConst,
@@ -288,11 +296,13 @@ impl Tokenizer {
               "reg" => TokenKind::KwReg,
               "return" => TokenKind::KwReturn,
               "static" => TokenKind::KwStatic,
+              "switch" => TokenKind::KwSwitch,
               "todo" => TokenKind::KwTodo,
               "type" => TokenKind::KwType,
               "unreachable" => TokenKind::KwUnreachable,
               "volatile" => TokenKind::KwVolatile,
               "while" => TokenKind::KwWhile,
+              "yield" => TokenKind::KwYield,
               _ => TokenKind::Identifier,
             },
             Span::new(self.file_id, start, end),
@@ -379,7 +389,10 @@ impl Tokenizer {
             {
               self.pos += 1;
             }
-            if self.source.chars().nth(self.pos).unwrap() == '.' {
+            if self.source.chars().nth(self.pos).unwrap() == '.'
+              && self.pos + 1 < self.source.len()
+              && self.source.chars().nth(self.pos + 1).unwrap().is_digit(10)
+            {
               self.pos += 1;
               while self.pos < self.source.len()
                 && self.source.chars().nth(self.pos).unwrap().is_digit(10)
@@ -509,12 +522,21 @@ impl Tokenizer {
         }
 
         Some('.') => {
-          tokens.push(Token::new(
-            TokenKind::Period,
-            Span::new(self.file_id, self.pos, self.pos + 1),
-            c.unwrap().to_string(),
-          ));
-          self.pos += 1;
+          if self.source.chars().nth(self.pos + 1).unwrap() == '.' {
+            tokens.push(Token::new(
+              TokenKind::PeriodPeriod,
+              Span::new(self.file_id, self.pos, self.pos + 2),
+              format!("{}.", c.unwrap()),
+            ));
+            self.pos += 2;
+          } else {
+            tokens.push(Token::new(
+              TokenKind::Period,
+              Span::new(self.file_id, self.pos, self.pos + 1),
+              c.unwrap().to_string(),
+            ));
+            self.pos += 1;
+          }
         }
 
         Some(',') => {

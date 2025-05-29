@@ -5,10 +5,15 @@ use inkwell::{
   builder::Builder,
   context::{AsContextRef, Context},
   debug_info::{DICompileUnit, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder},
-  llvm_sys::core::{LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed, LLVMStructSetBody},
+  llvm_sys::core::{
+    LLVMArrayType2, LLVMFunctionType, LLVMPointerType, LLVMStructCreateNamed, LLVMStructSetBody,
+  },
   module::{Linkage, Module},
   targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
-  types::{AsTypeRef, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, PointerType, StructType},
+  types::{
+    ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, PointerType,
+    StructType,
+  },
   values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
   },
@@ -18,13 +23,66 @@ use inkwell::{
 use crate::{
   ast::{inline_asm::OperandType, BinaryOperator, DefinitionLinkage, NumericConstant},
   checker::{
-    CheckedBlock, CheckedExpression, CheckedFunction, CheckedFunctionAttribute,
-    CheckedInlineAsmOperandAction, CheckedStatement, CheckedType, CheckedTypeDecl, CheckedTypeKind,
-    CheckedUnaryOperator, Project, TypeId,
+    CheckedBlock, CheckedEnum, CheckedEnumVariant, CheckedExpression, CheckedFunction,
+    CheckedFunctionAttribute, CheckedInlineAsmOperandAction, CheckedStatement, CheckedType,
+    CheckedTypeDecl, CheckedTypeKind, CheckedUnaryOperator, Project, TypeId,
   },
   compiler::VOID_TYPE_ID,
   Opts,
 };
+
+fn size_of(project: &mut Project, type_id: TypeId) -> usize {
+  let ty = project.types[type_id].clone();
+  match ty {
+    CheckedType::Builtin(_) => match type_id {
+      crate::compiler::UNKNOWN_TYPE_ID => unreachable!("size_of({type_id}) UNKNOWN_TYPE_ID"),
+      crate::compiler::VOID_TYPE_ID => 0,
+      crate::compiler::I8_TYPE_ID => std::mem::size_of::<i8>(),
+      crate::compiler::I16_TYPE_ID => std::mem::size_of::<i16>(),
+      crate::compiler::I32_TYPE_ID => std::mem::size_of::<i32>(),
+      crate::compiler::I64_TYPE_ID => std::mem::size_of::<i64>(),
+      crate::compiler::I128_TYPE_ID => std::mem::size_of::<i128>(),
+      crate::compiler::ISZ_TYPE_ID => std::mem::size_of::<isize>(),
+      crate::compiler::U8_TYPE_ID => std::mem::size_of::<u8>(),
+      crate::compiler::U16_TYPE_ID => std::mem::size_of::<u16>(),
+      crate::compiler::U32_TYPE_ID => std::mem::size_of::<u32>(),
+      crate::compiler::U64_TYPE_ID => std::mem::size_of::<u64>(),
+      crate::compiler::U128_TYPE_ID => std::mem::size_of::<u128>(),
+      crate::compiler::USZ_TYPE_ID => std::mem::size_of::<usize>(),
+      crate::compiler::F32_TYPE_ID => std::mem::size_of::<f32>(),
+      crate::compiler::F64_TYPE_ID => std::mem::size_of::<f64>(),
+      crate::compiler::BOOL_TYPE_ID => std::mem::size_of::<bool>(),
+      crate::compiler::CCHAR_TYPE_ID => std::mem::size_of::<std::ffi::c_char>(),
+      crate::compiler::RAWPTR_TYPE_ID => std::mem::size_of::<*const ()>(),
+      _ => unreachable!("size_of({type_id}) unknown builtin"),
+    },
+    CheckedType::TypeVariable(_, _, _) => unreachable!("size_of({type_id}) TypeVariable"),
+    CheckedType::GenericInstance(_, _, _) => todo!(),
+    CheckedType::GenericEnumInstance(_, _, _) => todo!(),
+    CheckedType::TypeDecl(type_decl_id, _) => {
+      let mut type_decl = project.type_decls[type_decl_id].clone();
+      let class = type_decl.kind.as_class_mut().unwrap();
+      class
+        .fields
+        .iter()
+        .map(|field| size_of(project, field.type_id))
+        .sum()
+    }
+    CheckedType::Enum(enum_id, _) => {
+      let enum_ = project.enums[enum_id].clone();
+      let mut size = 0;
+      for variant in enum_.variants.clone() {
+        size = size.max(size_of_variant(project, &variant));
+      }
+      size
+    }
+    CheckedType::RawPtr(_, _) => std::mem::size_of::<*const ()>(),
+    CheckedType::Slice(type_id, size, _) => {
+      let inner_type_size = size_of(project, type_id);
+      inner_type_size * size
+    }
+  }
+}
 
 #[derive(Debug)]
 pub struct LLVMBackend<'ctx> {
@@ -43,6 +101,8 @@ pub struct LLVMBackend<'ctx> {
   pub functions: RefCell<HashMap<String, FunctionValue<'ctx>>>,
   pub struct_types: RefCell<HashMap<String, StructType<'ctx>>>,
   pub struct_fields: RefCell<HashMap<String, Vec<String>>>,
+  pub enum_types: RefCell<HashMap<String, StructType<'ctx>>>,
+  pub enum_members: RefCell<HashMap<String, Vec<String>>>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
@@ -104,6 +164,8 @@ impl<'ctx> LLVMBackend<'ctx> {
       functions: RefCell::new(HashMap::new()),
       struct_types: RefCell::new(HashMap::new()),
       struct_fields: RefCell::new(HashMap::new()),
+      enum_types: RefCell::new(HashMap::new()),
+      enum_members: RefCell::new(HashMap::new()),
     }
   }
 }
@@ -131,12 +193,20 @@ pub fn compile_namespace<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Pr
     compile_type_decl_predecl(backend, project, type_decl);
   }
 
+  for enum_ in &project.enums.clone() {
+    compile_enum_predecl(backend, project, enum_);
+  }
+
   for function in &project.functions.clone() {
     compile_function_predecl(backend, project, function);
   }
 
   for type_decl in &project.type_decls.clone() {
     compile_type_decl(backend, project, type_decl);
+  }
+
+  for enum_ in &project.enums.clone() {
+    compile_enum(backend, project, enum_);
   }
 
   for function in &project.functions.clone() {
@@ -165,6 +235,24 @@ fn compile_type_decl_predecl<'ctx>(
     .struct_types
     .borrow_mut()
     .insert(type_decl.name.clone(), opaque_type);
+}
+
+fn compile_enum_predecl<'ctx>(
+  backend: &mut LLVMBackend<'ctx>,
+  _project: &mut Project,
+  enum_: &CheckedEnum,
+) {
+  let opaque_type = unsafe {
+    let struct_type = LLVMStructCreateNamed(
+      backend.context.as_ctx_ref(),
+      enum_.name.clone().as_mut_ptr() as *mut _,
+    );
+    StructType::new(struct_type)
+  };
+  backend
+    .enum_types
+    .borrow_mut()
+    .insert(enum_.name.clone(), opaque_type);
 }
 
 fn compile_type_decl<'ctx>(
@@ -221,6 +309,108 @@ fn compile_type_decl<'ctx>(
     .struct_fields
     .borrow_mut()
     .insert(type_decl.name.clone(), field_names);
+}
+
+fn size_of_variant(project: &mut Project, variant: &CheckedEnumVariant) -> usize {
+  match variant {
+    CheckedEnumVariant::Untyped(_, _) => 0,
+    CheckedEnumVariant::WithValue(_, expr, _) => {
+      let type_id = expr.type_id(project);
+      size_of(project, type_id)
+    }
+    CheckedEnumVariant::TupleLike(_, type_ids, _) => {
+      type_ids.iter().map(|id| size_of(project, *id)).sum()
+    }
+    CheckedEnumVariant::StructLike(_, variables, _) => variables
+      .iter()
+      .map(|var| size_of(project, var.type_id))
+      .sum(),
+  }
+}
+
+fn compile_enum<'ctx>(backend: &mut LLVMBackend<'ctx>, project: &mut Project, enum_: &CheckedEnum) {
+  let binding = backend.enum_types.borrow_mut().clone();
+  let enum_type = binding
+    .get(enum_.name.as_str())
+    .expect("internal error: failed to get enum type");
+
+  let mut members = vec![];
+  for variant in enum_.variants.clone() {
+    members.push(match variant {
+      CheckedEnumVariant::Untyped(name, _)
+      | CheckedEnumVariant::WithValue(name, _, _)
+      | CheckedEnumVariant::TupleLike(name, _, _)
+      | CheckedEnumVariant::StructLike(name, _, _) => name,
+    });
+  }
+
+  // Get the size of all the variants
+  let mut member_sizes = vec![];
+  for variant in enum_.variants.clone() {
+    let size = size_of_variant(project, &variant);
+    member_sizes.push(size);
+  }
+
+  // Get the biggest size
+  let max_size = member_sizes
+    .iter()
+    .max()
+    .expect("internal error: failed to get max size");
+
+  unsafe {
+    LLVMStructSetBody(
+      enum_type.as_type_ref(),
+      [
+        backend.context.i8_type().as_type_ref(),
+        backend
+          .context
+          .i8_type()
+          .array_type(*max_size as u32)
+          .as_type_ref(),
+      ]
+      .as_mut_ptr(),
+      2 as u32,
+      false as i32,
+    );
+  }
+
+  for (variant, name) in enum_.variants.iter().zip(members.iter()) {
+    if let CheckedEnumVariant::Untyped(_, _) | CheckedEnumVariant::WithValue(_, _, _) = variant {
+      continue;
+    }
+
+    let variant_type = unsafe {
+      StructType::new(LLVMStructCreateNamed(
+        backend.context.as_ctx_ref(),
+        format!("{}_{}", enum_.name, name).as_mut_ptr() as *mut _,
+      ))
+    };
+    match variant {
+      CheckedEnumVariant::Untyped(_, _) | CheckedEnumVariant::WithValue(_, _, _) => unreachable!(),
+      CheckedEnumVariant::TupleLike(_, type_ids, _) => {
+        let mut variant_types = vec![backend.context.i8_type().as_type_ref()];
+        for type_id in type_ids {
+          let variant_type = compile_type(backend, project, *type_id);
+          variant_types.push(variant_type.as_type_ref());
+        }
+
+        unsafe {
+          LLVMStructSetBody(
+            variant_type.as_type_ref(),
+            variant_types.as_mut_ptr() as *mut _,
+            variant_types.len() as u32,
+            false as i32,
+          );
+        }
+      }
+      CheckedEnumVariant::StructLike(_, fields, _) => continue,
+    }
+  }
+
+  backend
+    .enum_members
+    .borrow_mut()
+    .insert(enum_.name.clone(), members);
 }
 
 fn compile_function_predecl<'ctx>(
@@ -349,7 +539,7 @@ fn compile_function<'ctx>(
       backend.current_function = None;
     }
     DefinitionLinkage::External => {}
-    DefinitionLinkage::ImplicitConstructor | DefinitionLinkage::ImplicitEnumConstructor => {
+    DefinitionLinkage::ImplicitConstructor => {
       let fn_value = *backend
         .functions
         .borrow_mut()
@@ -411,6 +601,7 @@ fn compile_function<'ctx>(
         .build_return(Some(&previous_struct.unwrap()))
         .expect("internal error: failed to build return");
     }
+    DefinitionLinkage::ImplicitEnumConstructor => {}
   }
 }
 
@@ -1468,6 +1659,38 @@ fn compile_expression<'ctx>(
       Some(value)
     }
 
+    CheckedExpression::IndexedEnum(enum_id, name, _, _, _) => {
+      let enum_ = &project.enums[*enum_id];
+      let members = backend
+        .enum_members
+        .borrow()
+        .get(enum_.name.as_str())
+        .unwrap()
+        .clone();
+
+      let mut idx = 0;
+      while idx < members.len() {
+        if &members[idx] == name {
+          break;
+        }
+        idx += 1;
+      }
+
+      if idx >= members.len() {
+        panic!("internal error: member not found in enum");
+      }
+
+      let variant = enum_.variants[idx].clone();
+      match variant {
+        CheckedEnumVariant::Untyped(_, _) => unreachable!("untyped enum variant"),
+        CheckedEnumVariant::WithValue(_, ref value, _) => {
+          compile_expression(backend, project, value)
+        }
+        CheckedEnumVariant::TupleLike(_, _, _) => todo!(),
+        CheckedEnumVariant::StructLike(_, _, _) => todo!(),
+      }
+    }
+
     CheckedExpression::InlineAsm {
       volatile,
       asm,
@@ -1583,6 +1806,21 @@ fn compile_expression<'ctx>(
       }
     }
 
+    CheckedExpression::Range(start, end, type_id, span) => {
+      let start = compile_expression(backend, project, start)?;
+      let end = compile_expression(backend, project, end)?;
+      let ty = compile_type(backend, project, *type_id);
+
+      let size = end.into_int_value().const_sub(start.into_int_value());
+
+      let ptr_value = backend
+        .builder
+        .build_array_alloca(ty, size, "array_ptr")
+        .expect("internal error: failed to build array alloca");
+
+      Some(BasicValueEnum::PointerValue(ptr_value))
+    }
+
     _ => todo!("compile_expression not implemented for {:?}", expr),
   }
 }
@@ -1592,7 +1830,8 @@ fn compile_type<'ctx>(
   project: &mut Project,
   type_id: TypeId,
 ) -> BasicTypeEnum<'ctx> {
-  match &project.types[type_id] {
+  let ty = &project.types[type_id];
+  match ty {
     CheckedType::Builtin(_) => match type_id {
       crate::compiler::UNKNOWN_TYPE_ID => {
         panic!("internal error: encountered UNKNOWN_TYPE_ID in codegen")
@@ -1629,12 +1868,32 @@ fn compile_type<'ctx>(
         .clone(),
     ),
 
+    CheckedType::Enum(enum_id, _) => {
+      let enum_ = project.enums[*enum_id].clone();
+      BasicTypeEnum::StructType(
+        backend
+          .enum_types
+          .borrow()
+          .get(&enum_.name)
+          .unwrap()
+          .clone(),
+      )
+    }
+
     CheckedType::RawPtr(type_id, _) => BasicTypeEnum::PointerType(unsafe {
       PointerType::new(LLVMPointerType(
         compile_type(backend, project, *type_id).as_type_ref(),
         0,
       ))
     }),
+
+    CheckedType::Slice(type_id, size, _) => {
+      let size = *size;
+      let compiled_type = compile_type(backend, project, *type_id);
+      BasicTypeEnum::ArrayType(unsafe {
+        ArrayType::new(LLVMArrayType2(compiled_type.as_type_ref(), size as u64))
+      })
+    }
 
     _ => todo!(
       "compile_type not implemented for type {:?}",

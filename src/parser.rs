@@ -44,6 +44,7 @@ impl Parser {
       let token = self.tokens.get(self.pos).unwrap();
 
       match token.kind {
+        TokenKind::CloseBrace => break,
         TokenKind::KwFn => {
           let fun = self.parse_fn(DefinitionLinkage::Internal)?;
           namespace.functions.push(fun);
@@ -470,6 +471,16 @@ impl Parser {
         ))
       }
 
+      TokenKind::KwYield => {
+        let yield_token = self.expect(TokenKind::KwYield)?;
+        let expr = self.parse_expression(false)?;
+        let semi = self.expect(TokenKind::Semicolon)?;
+        Ok(ParsedStatement::Yield(
+          expr,
+          yield_token.span.join(&semi.span),
+        ))
+      }
+
       TokenKind::KwLet | TokenKind::KwMut => {
         let mutable = self.current().kind == TokenKind::KwMut;
         self.pos += 1;
@@ -858,6 +869,46 @@ impl Parser {
           ParsedExpression::Var(name, span)
         }
       }
+      TokenKind::KwSwitch => {
+        let switch = self.expect(TokenKind::KwSwitch)?;
+        let expr = self.parse_expression(false)?;
+        self.expect(TokenKind::OpenBrace)?;
+        let mut cases = vec![];
+        while self.current().kind != TokenKind::CloseBrace {
+          let case_kw = self.expect(TokenKind::KwCase)?;
+          let case = self.parse_expression(false)?;
+          let block = if self.current().kind == TokenKind::Equal {
+            self.expect(TokenKind::Equal)?;
+            let expr = self.parse_expression(false)?;
+            let semi = self.expect(TokenKind::Semicolon)?;
+            let span = Span {
+              file_id: self.file_id,
+              start: case_kw.span.start,
+              end: semi.span.end,
+            };
+            ParsedBlock {
+              stmts: vec![ParsedStatement::Yield(expr, span)],
+              span,
+            }
+          } else {
+            self.parse_block()?
+          };
+          cases.push((case, block));
+        }
+
+        let cb = self.expect(TokenKind::CloseBrace)?;
+        let span = Span {
+          file_id: self.file_id,
+          start: switch.span.start,
+          end: cb.span.end,
+        };
+        ParsedExpression::Switch {
+          condition: Box::new(expr),
+          cases,
+          default: None,
+          span,
+        }
+      }
       TokenKind::KwAsm => self.parse_inline_asm()?,
       TokenKind::KwTodo => {
         self.pos += 1;
@@ -990,15 +1041,24 @@ impl Parser {
           }
         }
 
+        TokenKind::PeriodPeriod => {
+          self.pos += 1;
+          let rhs = self.parse_expression(false)?;
+          let span = Span {
+            file_id: self.file_id,
+            start: expr.span().start,
+            end: rhs.span().end,
+          };
+          expr = ParsedExpression::Range(Box::new(expr), Box::new(rhs), span);
+        }
+
         TokenKind::OpenBracket => {
           self.pos += 1;
 
           if self.pos < self.tokens.len() {
             let idx = self.parse_expression(false)?;
 
-            let end;
             if self.pos < self.tokens.len() {
-              end = self.pos;
               match &self.current().kind {
                 TokenKind::CloseBracket => {
                   self.pos += 1;
@@ -1023,7 +1083,7 @@ impl Parser {
               Span {
                 file_id: self.file_id,
                 start: span.start,
-                end,
+                end: self.current().span.end,
               },
             );
           }
@@ -1266,7 +1326,7 @@ impl Parser {
     let mut type_ = self.parse_type_primary()?;
     while matches!(
       self.current().kind,
-      TokenKind::Asterisk | TokenKind::Question
+      TokenKind::Asterisk | TokenKind::Question | TokenKind::OpenBracket
     ) {
       let token = self.expect(self.current().kind.clone())?;
       match token.kind {
@@ -1275,6 +1335,24 @@ impl Parser {
         }
         TokenKind::Question => {
           type_ = ParsedType::Optional(Box::new(type_), token.span);
+        }
+        TokenKind::OpenBracket => {
+          let size = if self.current().kind == TokenKind::Identifier {
+            if self.current().literal == "_".to_string() {
+              self.expect(TokenKind::Identifier)?;
+              None
+            } else {
+              return Err(Diagnostic::error(
+                self.current().span,
+                "expected an integer or `_`".into(),
+              ));
+            }
+          } else {
+            Some(self.expect(TokenKind::Integer)?.constant.unwrap())
+          };
+          self.expect(TokenKind::CloseBracket)?;
+
+          type_ = ParsedType::Slice(Box::new(type_), size, token.span);
         }
         _ => unreachable!(),
       }
